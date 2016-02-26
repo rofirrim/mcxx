@@ -295,6 +295,40 @@ then
 fi
 dnl -- End New Fortran scanner --
 
+dnl -- New GLR parsing algorithm ---
+new_glr_algorithm="no"
+AC_MSG_CHECKING([if new GLR algorithm has been enabled])
+AC_ARG_ENABLE([new-glr-algorithm],
+    AS_HELP_STRING([--enable-new-glr-algorithm], [Enables a new GLR algorith. THIS IS EXPERIMENTAL]),
+    [
+      if test x$enableval = xyes -o x$enableval = x;
+      then
+         new_glr_algorithm="yes"
+         dnl no, they have not been disabled
+         AC_MSG_RESULT([yes])
+         AC_MSG_WARN([The new GLR algorithm is experimental and it is not supported!!!])
+      else if test x$enableval = xno;
+           then
+              new_glr_algorithm="no"
+              AC_MSG_RESULT([no])
+           else
+              AC_MSG_ERROR([This option can only be given 'yes' or 'no' values])
+           fi
+      fi
+    ],
+    [
+       AC_MSG_RESULT([no])
+    ]
+)
+NEW_GLR_ALGORITHM=$new_glr_algorithm
+AC_SUBST([NEW_GLR_ALGORITHM])
+AM_CONDITIONAL([NEW_GLR_ALGORITHM], test x$new_glr_algorithm = xyes)
+if test x$new_glr_algorithm = xyes;
+then
+    AC_DEFINE([NEW_GLR_ALGORITHM], 1, [Define to 1 if binaries are installed in pkglibdir])
+fi
+dnl -- End New GLR parsing algorithm --
+
 dnl -- Extra compilers ---
 
 disable_xlc=no
