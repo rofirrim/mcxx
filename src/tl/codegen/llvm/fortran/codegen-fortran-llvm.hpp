@@ -57,10 +57,8 @@ namespace Codegen
         void visit(const Nodecl::CompoundStatement &node);
         void visit(const Nodecl::ExpressionStatement &node);
         void visit(const Nodecl::Assignment &node);
-
-        // void visit(const Nodecl::ErrExpr& node);
-        // void visit(const Nodecl::ErrStatement& node);
-
+        void visit(const Nodecl::IfElseStatement& node);
+        void visit(const Nodecl::ForStatement& node);
 
       private:
         Codegen::FortranBase base;
@@ -94,16 +92,16 @@ namespace Codegen
             return function_info.mapping[s];
         }
 
-        llvm::Function *get_function() 
+        llvm::Function *get_current_function() 
         {
             return function_info.function;
         }
-        void set_function(llvm::Function *fun)
+        void set_current_function(llvm::Function *fun)
         {
             ERROR_CONDITION(fun == NULL, "Invalid function", 0);
             function_info.function = fun;
         }
-        void clear_function()
+        void clear_current_function()
         {
             function_info.function = nullptr;
         }
@@ -117,6 +115,7 @@ namespace Codegen
         {
             return function_info.current_block;
         }
+        void emit_variable(TL::Symbol sym);
 
         friend class FortranVisitorLLVMExpression;
     };

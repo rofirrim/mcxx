@@ -140,12 +140,12 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
                     "Mismatch between TL and llvm::Arguments",
                     0);
 
-    set_function(fun);
+    set_current_function(fun);
     set_current_block(llvm::BasicBlock::Create(llvm_context, "entry", fun));
     walk(node.get_statements());
     // FIXME: Finish function. Use proper value!
     ir_builder->CreateRet(nullptr);
-    clear_function();
+    clear_current_function();
 }
 
 void FortranLLVM::visit(const Nodecl::Context &node)
@@ -161,6 +161,100 @@ void FortranLLVM::visit(const Nodecl::CompoundStatement &node)
 void FortranLLVM::visit(const Nodecl::ExpressionStatement &node)
 {
     walk(node.get_nest());
+}
+
+void FortranLLVM::visit(const Nodecl::IfElseStatement& node)
+{
+    Nodecl::NodeclBase condition = node.get_condition();
+    Nodecl::NodeclBase then_node = node.get_then();
+    Nodecl::NodeclBase else_node = node.get_else();
+
+    llvm::Value *cond_val = visit_expression(condition);
+
+    llvm::BasicBlock * block_true = llvm::BasicBlock::Create(llvm_context, "if.true", get_current_function());
+    llvm::BasicBlock * block_end = llvm::BasicBlock::Create(llvm_context, "if.end", get_current_function());
+
+    llvm::BasicBlock * block_false = block_end;
+    if (!else_node.is_null())
+    {
+        block_false = llvm::BasicBlock::Create(llvm_context, "if.else", get_current_function());
+    }
+
+    ir_builder->CreateCondBr(cond_val, block_true, block_false);
+
+    set_current_block(block_true);
+    walk(then_node);
+    ir_builder->CreateBr(block_end);
+
+    if (!else_node.is_null())
+    {
+        set_current_block(block_false);
+        walk(else_node);
+        ir_builder->CreateBr(block_end);
+    }
+
+    set_current_block(block_end);
+}
+
+void FortranLLVM::visit(const Nodecl::ForStatement& node)
+{
+    Nodecl::NodeclBase loop_control = node.get_loop_header();
+    Nodecl::NodeclBase body = node.get_statement();
+
+    if (!loop_control.is<Nodecl::RangeLoopControl>())
+        internal_error("Not yet implemented", 0);
+
+    Nodecl::RangeLoopControl range_loop_control
+        = loop_control.as<Nodecl::RangeLoopControl>();
+
+    Nodecl::NodeclBase ind_var = range_loop_control.get_induction_variable();
+    Nodecl::NodeclBase lower = range_loop_control.get_lower();
+    Nodecl::NodeclBase upper = range_loop_control.get_upper();
+    Nodecl::NodeclBase step = range_loop_control.get_step();
+
+    if (!step.is_null() && !step.is_constant())
+        internal_error("Not yet implemented", 0);
+
+    if (const_value_is_positive(step.get_constant()))
+    {
+    }
+    else
+        internal_error("Not yet implemented", 0);
+
+    llvm::Value* vind_var = visit_expression(ind_var);
+    llvm::Value* vlower = visit_expression(lower);
+    llvm::Value* vupper = visit_expression(upper);
+    llvm::Value* vstep;
+    if (step.is_null())
+        vstep = llvm::Constant::getIntegerValue(
+                get_llvm_type(ind_var.get_symbol().get_type()),
+                llvm::APInt(ind_var.get_type().get_size() * 8, // FIXME
+                    1, /* is_signed */ true));
+    else
+        vstep = visit_expression(step);
+
+    ir_builder->CreateStore(vlower, vind_var);
+
+    llvm::BasicBlock *block_check = llvm::BasicBlock::Create(llvm_context, "loop.check", get_current_function());
+    llvm::BasicBlock *block_body = llvm::BasicBlock::Create(llvm_context, "loop.body", get_current_function());
+    llvm::BasicBlock *block_end = llvm::BasicBlock::Create(llvm_context, "loop.end", get_current_function());
+
+    ir_builder->CreateBr(block_check);
+
+    set_current_block(block_check);
+    llvm::Value* vcheck = ir_builder->CreateICmpSLE(
+            ir_builder->CreateLoad(vind_var),
+            vupper);
+    ir_builder->CreateCondBr(vcheck, block_body, block_end);
+
+    set_current_block(block_body);
+    walk(body);
+    ir_builder->CreateStore(
+        ir_builder->CreateAdd(ir_builder->CreateLoad(vind_var), vstep),
+        vind_var);
+    ir_builder->CreateBr(block_check);
+
+    set_current_block(block_end);
 }
 
 void FortranLLVM::visit(const Nodecl::Assignment &node)
@@ -196,10 +290,8 @@ class FortranVisitorLLVMExpression : public Nodecl::NodeclVisitor<void>
 
     void visit(const Nodecl::Symbol &node)
     {
+        llvm_visitor->emit_variable(node.get_symbol());
         value = llvm_visitor->get_value(node.get_symbol());
-        ERROR_CONDITION(value == nullptr,
-                        "No llvm::Value mapping for symbol '%s'\n",
-                        node.get_symbol().get_name().c_str());
     }
 
     void visit(const Nodecl::Conversion& node)
@@ -240,7 +332,26 @@ class FortranVisitorLLVMExpression : public Nodecl::NodeclVisitor<void>
     // void visit(const Nodecl::Minus& node);
     // void visit(const Nodecl::LowerThan& node);
     // void visit(const Nodecl::LowerOrEqualThan& node);
-    // void visit(const Nodecl::GreaterThan& node);
+    void visit(const Nodecl::GreaterThan& node)
+    {
+        if (node.get_lhs().get_type().is_signed_integral()
+                && node.get_rhs().get_type().is_signed_integral())
+        {
+            llvm::Value *vlhs = llvm_visitor->visit_expression(node.get_lhs());
+            llvm::Value *vrhs = llvm_visitor->visit_expression(node.get_rhs());
+
+            value = llvm_visitor->ir_builder->CreateICmpSGT(
+                    vlhs,
+                    vrhs);
+        }
+        else
+        {
+            internal_error(
+                "Not implemented yet '%s' <?> '%s\n",
+                print_declarator(node.get_lhs().get_type().get_internal_type()),
+                print_declarator(node.get_rhs().get_type().get_internal_type()));
+        }
+    }
     // void visit(const Nodecl::GreaterOrEqualThan& node);
     // void visit(const Nodecl::LogicalAnd& node);
     // void visit(const Nodecl::LogicalOr& node);
@@ -272,41 +383,11 @@ class FortranVisitorLLVMExpression : public Nodecl::NodeclVisitor<void>
     // void visit(const Nodecl::ArraySubscript& node);
     // void visit(const Nodecl::FunctionCall& node);
     // void visit(const Nodecl::FortranActualArgument& node);
-    // void visit(const Nodecl::EmptyStatement& node);
-    // void visit(const Nodecl::IfElseStatement& node);
-    // void visit(const Nodecl::ReturnStatement& node);
-    // void visit(const Nodecl::LabeledStatement& node);
-    // void visit(const Nodecl::GotoStatement& node);
-    // void visit(const Nodecl::ForStatement& node);
-    // void visit(const Nodecl::WhileStatement& node);
-    // void visit(const Nodecl::RangeLoopControl& node);
-    // void visit(const Nodecl::SwitchStatement& node);
-    // void visit(const Nodecl::CaseStatement& node);
-    // void visit(const Nodecl::DefaultStatement& node);
-    // void visit(const Nodecl::BreakStatement& node);
-    // void visit(const Nodecl::ContinueStatement& node);
     // void visit(const Nodecl::FortranIoSpec& node);
-    // void visit(const Nodecl::FortranPrintStatement& node);
-    // void visit(const Nodecl::FortranWriteStatement& node);
-    // void visit(const Nodecl::FortranReadStatement& node);
-    // void visit(const Nodecl::FortranStopStatement& node);
-    // void visit(const Nodecl::FortranPauseStatement& node);
-    // void visit(const Nodecl::FortranComputedGotoStatement& node);
-    // void visit(const Nodecl::FortranIoStatement& node);
-    // void visit(const Nodecl::FortranOpenStatement& node);
-    // void visit(const Nodecl::FortranCloseStatement& node);
-    // void visit(const Nodecl::FortranAllocateStatement& node);
-    // void visit(const Nodecl::FortranDeallocateStatement& node);
-    // void visit(const Nodecl::FortranNullifyStatement& node);
-    // void visit(const Nodecl::FortranArithmeticIfStatement& node);
-    // void visit(const Nodecl::FortranLabelAssignStatement& node);
-    // void visit(const Nodecl::FortranAssignedGotoStatement& node);
-    // void visit(const Nodecl::FortranEntryStatement& node);
     // void visit(const Nodecl::FortranImpliedDo& node);
     // void visit(const Nodecl::FortranData& node);
     // void visit(const Nodecl::FortranEquivalence& node);
     // void visit(const Nodecl::FortranAlternateReturnArgument& node);
-    // void visit(const Nodecl::FortranAlternateReturnStatement& node);
     // void visit(const Nodecl::FortranForall& node);
     // void visit(const Nodecl::FortranWhere& node);
     // void visit(const Nodecl::FortranBozLiteral& node);
@@ -320,7 +401,6 @@ class FortranVisitorLLVMExpression : public Nodecl::NodeclVisitor<void>
     // void visit(const Nodecl::PragmaCustomDeclaration& node);
     // void visit(const Nodecl::PragmaCustomClause& node);
     // void visit(const Nodecl::PragmaCustomLine& node);
-    // void visit(const Nodecl::PragmaCustomStatement& node);
     // void visit(const Nodecl::PragmaCustomDirective& node);
     // void visit(const Nodecl::PragmaClauseArg& node);
     // void visit(const Nodecl::SourceComment& node);
@@ -368,12 +448,11 @@ llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
         {
             llvm_params.push_back(get_llvm_type(t));
         }
-
         return llvm::FunctionType::get(get_llvm_type(t.returns()),
                                        llvm_params,
                                        /* isVarArg */ false);
     }
-    else if (t.is_signed_integral())
+    else if (t.is_signed_integral() || t.is_bool())
     {
         return llvm::IntegerType::get(llvm_context, t.get_size() * 8);
     }
@@ -386,6 +465,21 @@ llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
         internal_error("Cannot convert type '%s' to LLVM type",
                        print_declarator(t.get_internal_type()));
     }
+}
+
+void FortranLLVM::emit_variable(TL::Symbol sym)
+{
+    ERROR_CONDITION(!sym.is_variable(),
+                    "Invalid symbol kind '%s'\n",
+                    symbol_kind_name(sym.get_internal_symbol()));
+    if (get_value(sym) != NULL)
+        return;
+
+    llvm::Value *allocation
+        = ir_builder->CreateAlloca(get_llvm_type(sym.get_type()),
+                                   /* array_size */ nullptr,
+                                   sym.get_name());
+    map_symbol_to_value(sym, allocation);
 }
 
 }
