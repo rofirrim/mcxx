@@ -1841,6 +1841,61 @@ AM_CONDITIONAL([BUILD_VECTORIZATION], [test x$is_enabled_vectorization = xyes])
 AC_SUBST([VECTORIZATION_ENABLED], $is_enabled_vectorization)
 dnl ------------------------------------
 
+dnl --------------------- Fortran LLVM codegen --------------------------------
+is_enabled_fortran_llvm_codegen="no"
+
+AC_MSG_CHECKING([if Fortran LLVM codegen is enabled])
+AC_ARG_ENABLE([fortran-llvm-codegen],
+  AS_HELP_STRING([--enable-fortran-llvm-codegen], [Enables Fortran codegen for LLVM IR (EXPERIMENTAL)]),
+  [
+    if test x$enableval = xyes -o x$enableval = x;
+    then
+      is_enabled_fortran_llvm_codegen="yes"
+      AC_MSG_RESULT([no])
+    else if test x$enableval = xno;
+      then
+
+        is_enabled_fortran_llvm_codegen="no"
+        AC_MSG_RESULT([yes])
+      else
+        AC_MSG_ERROR([This option can only be given 'yes' or 'no' values])
+      fi
+    fi
+  ],
+  [
+    is_enabled_fortran_llvm_codegen="no"
+    AC_MSG_RESULT([no])
+  ]
+)
+
+if test "$is_enabled_fortran_llvm_codegen" = "yes";
+then
+    AC_CHECK_PROG([LLVM_CONFIG], [llvm-config], [llvm-config])
+    if test "$LLVM_CONFIG" = "";
+    then
+        AC_MSG_ERROR([To enable Fortran LLVM codegen you will need llvm-config])
+    else
+        LLVM_CFLAGS="-I`$LLVM_CONFIG --includedir`"
+        AC_SUBST([LLVM_CFLAGS])
+        LLVM_CXXFLAGS="-I`$LLVM_CONFIG --includedir` -fno-rtti -fno-exceptions -Wno-shadow"
+        AC_SUBST([LLVM_CXXFLAGS])
+        LLVM_LDFLAGS="`$LLVM_CONFIG --ldflags` -Wl,-rpath,`$LLVM_CONFIG --libdir`"
+        AC_SUBST([LLVM_LDFLAGS])
+        LLVM_LIBS=`$LLVM_CONFIG --libs`
+        AC_SUBST([LLVM_LIBS])
+        LLVM_BINDIR=`$LLVM_CONFIG --bindir`
+        AC_SUBST([LLVM_BINDIR])
+
+        INSTALL_CONFIG_FILES="${INSTALL_CONFIG_FILES} 50.config.llvm"
+        COMPILER_NAMES="${COMPILER_NAMES} llvmfc"
+    fi
+
+fi
+
+AM_CONDITIONAL([BUILD_FORTRAN_LLVM_CODEGEN], test x$is_enabled_fortran_llvm_codegen = xyes)
+
+dnl ---------------------
+
 dnl --------------------- Regeneration files ---------------------
 
 enable_regeneration=yes
@@ -1898,6 +1953,7 @@ AC_ARG_VAR([XLCXX], [IBM XL C++ compiler])
 AC_ARG_VAR([XLF], [IBM XL Fortran compiler])
 AC_ARG_VAR([GPERF], [GNU gperf])
 AC_ARG_VAR([GIT], [git content tracker])
+AC_ARG_VAR([LLVM_CONFIG], [LLVM config tool])
 
 force_flex=no
 flex_good=no

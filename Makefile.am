@@ -2810,6 +2810,46 @@ src_tl_codegen_base_fortran_libcodegen_fortran_la_SOURCES = \
 # Empty
 
 ##########################################################################
+# src/tl/codegen/llvm/fortran
+##########################################################################
+
+if BUILD_FORTRAN_LLVM_CODEGEN
+
+phases_LTLIBRARIES += src/tl/codegen/llvm/fortran/libcodegen-fortran-llvm.la
+
+src_tl_codegen_llvm_fortran_libcodegen_fortran_llvm_la_CFLAGS = $(phases_cflags) \
+							   -I$(top_srcdir)/src/frontend \
+							   -I$(top_srcdir)/src/frontend/fortran \
+							   -I$(top_builddir)/src/frontend \
+							   -I$(top_builddir)/src/frontend/fortran \
+							   -I$(srcdir)/src/tl/codegen/common \
+							   $(LLVM_CFLAGS)
+
+src_tl_codegen_llvm_fortran_libcodegen_fortran_llvm_la_CXXFLAGS = $(phases_cxxflags) \
+							   -I$(top_srcdir)/src/frontend \
+							   -I$(top_srcdir)/src/frontend/fortran \
+							   -I$(top_builddir)/src/frontend \
+							   -I$(top_builddir)/src/frontend/fortran \
+						       -I$(srcdir)/src/tl/codegen/common \
+							   $(LLVM_CXXFLAGS)
+
+src_tl_codegen_llvm_fortran_libcodegen_fortran_llvm_la_LDFLAGS = $(phases_ldflags) \
+							   $(LLVM_LDFLAGS)
+src_tl_codegen_llvm_fortran_libcodegen_fortran_llvm_la_LIBADD = \
+							   src/tl/codegen/common/libcodegen-common.la \
+							   src/tl/codegen/base/fortran/libcodegen-fortran.la \
+							   $(phases_libadd) \
+							   $(LLVM_LIBS) \
+							   $(END)
+
+src_tl_codegen_llvm_fortran_libcodegen_fortran_llvm_la_SOURCES = \
+	 src/tl/codegen/llvm/fortran/codegen-fortran-llvm.hpp \
+	 src/tl/codegen/llvm/fortran/codegen-fortran-llvm.cpp \
+  	 $(END)
+
+endif
+
+##########################################################################
 # src/tl/codegen/gpu/cuda
 ##########################################################################
 
@@ -3292,6 +3332,7 @@ config_edit = \
      -e 's|@NANOS6_INCLUDES[@]|$(NANOS6_INCLUDES)|g' \
      -e 's|@NANOS6_LIB[@]|$(NANOS6_LIB)|g' \
      -e 's|@GOMP_OMP_LIB[@]|$(GOMP_OMP_LIB)|g' \
+     -e 's|@LLVM_BINDIR[@]|$(LLVM_BINDIR)|g' \
     $(END)
 
 # Cross compiler profile names

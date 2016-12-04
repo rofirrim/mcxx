@@ -36,13 +36,11 @@ namespace Codegen
 {
     class FortranBase : public CodegenPhase
     {
-        protected:
+        public:
+            FortranBase();
 
             virtual void codegen(const Nodecl::NodeclBase&, std::ostream* out);
             virtual void codegen_cleanup();
-
-        public:
-            FortranBase();
 
             void visit(const Nodecl::TopLevel& node);
             void visit(const Nodecl::FunctionCode& node);

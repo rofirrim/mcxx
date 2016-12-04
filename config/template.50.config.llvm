@@ -1,0 +1,11 @@
+# Plain profiles
+[llvmfc]
+language = Fortran
+options =
+fortran_preprocessor_name = @GFORTRAN@
+fortran_preprocessor_options = -cpp -E
+compiler_name = @LLVM_BINDIR@/llc
+compiler_options =
+linker_name = @GFORTRAN@
+linker_options =
+codegen_phase = libcodegen-fortran-llvm.so 
