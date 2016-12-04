@@ -39,6 +39,7 @@
 #include <ctype.h>
 
 #include "cxx-lexer.h"
+#include "cxx-typeenviron.h"
 
 #include <llvm/Support/raw_os_ostream.h>
 #include <llvm/IR/Type.h>
@@ -82,6 +83,8 @@ void FortranLLVM::visit(const Nodecl::TopLevel &node)
     current_module = llvm::make_unique<llvm::Module>(
         TL::CompilationProcess::get_current_file().get_filename(),
         llvm_context);
+
+    current_module->setTargetTriple(llvm::sys::getDefaultTargetTriple());
 
     ir_builder = std::unique_ptr<llvm::IRBuilder<> >(
         new llvm::IRBuilder<>(llvm_context));
@@ -384,6 +387,7 @@ llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
                        print_declarator(t.get_internal_type()));
     }
 }
+
 }
 
 

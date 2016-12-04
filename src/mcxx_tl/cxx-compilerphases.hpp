@@ -68,6 +68,7 @@ LIBMCXXTL_EXTERN void initialize_dto(translation_unit_t* translation_unit);
 LIBMCXXTL_EXTERN const char* codegen_to_str(nodecl_t node, const decl_context_t* decl_context);
 
 LIBMCXXTL_EXTERN void codegen_set_parameter(int n, void* data);
+LIBMCXXTL_EXTERN const char* codegen_get_extension(void);
 
 
 #ifdef __cplusplus

@@ -714,6 +714,12 @@ extern "C"
         TL::CompilerPhaseRunner::start_compiler_phase_execution(config, translation_unit);
     }
 
+    const char* codegen_get_extension(void)
+    {
+        Codegen::CodegenPhase* codegen_phase = reinterpret_cast<Codegen::CodegenPhase*>(CURRENT_CONFIGURATION->codegen_phase);
+        return codegen_phase->get_extension();
+    }
+
     void run_codegen_phase(FILE *out_file, translation_unit_t* translation_unit,
             const char* output_filename)
     {

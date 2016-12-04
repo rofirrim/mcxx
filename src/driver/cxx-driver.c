@@ -3667,9 +3667,16 @@ static const char* codegen_translation_unit(translation_unit_t* translation_unit
 
         const char* output_filename_basename = NULL; 
 
-        if (IS_FORTRAN_LANGUAGE)
+        const char* codegen_extension = codegen_get_extension();
+
+        if (IS_FORTRAN_LANGUAGE && codegen_extension == NULL)
         {
-            // Change the extension to be .f90 always
+            // Change the extension to be .f90 always in Fortran
+            codegen_extension = ".f90";
+        }
+
+        if (codegen_extension != NULL)
+        {
             const char * ext = strrchr(input_filename_basename, '.');
             ERROR_CONDITION(ext == NULL, "Expecting extension", 0);
 
@@ -3679,7 +3686,7 @@ static const char* codegen_translation_unit(translation_unit_t* translation_unit
             strncpy(c, input_filename_basename, (size_t)(ext - input_filename_basename));
             c[ext - input_filename_basename + 1] = '\0';
 
-            input_filename_basename = strappend(c, ".f90");
+            input_filename_basename = strappend(c, codegen_extension);
         }
 
         output_filename_basename = strappend(preffix,

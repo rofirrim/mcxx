@@ -38,6 +38,11 @@ namespace Codegen
 
         public:
             virtual void handle_parameter(int n, void* data);
+
+            virtual const char *get_extension()
+            {
+                return NULL;
+            }
     };
 
     CodegenPhase& get_current();

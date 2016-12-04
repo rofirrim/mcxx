@@ -46,6 +46,11 @@ namespace Codegen
         virtual void codegen(const Nodecl::NodeclBase &, std::ostream *out);
         virtual void codegen_cleanup();
 
+        virtual const char* get_extension() {
+            // We want the output files be .ll
+            return ".ll";
+        }
+
         void visit(const Nodecl::TopLevel &node);
         void visit(const Nodecl::FunctionCode &node);
         void visit(const Nodecl::Context &node);
@@ -55,6 +60,7 @@ namespace Codegen
 
         // void visit(const Nodecl::ErrExpr& node);
         // void visit(const Nodecl::ErrStatement& node);
+
 
       private:
         Codegen::FortranBase base;
