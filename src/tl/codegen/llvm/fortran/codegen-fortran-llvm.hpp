@@ -97,7 +97,7 @@ namespace Codegen
                 }
         };
 
-        struct GfortranTypes
+        struct GfortranRuntime
         {
             // Input/Output
             llvm::Type* st_parameter_common;
@@ -111,10 +111,25 @@ namespace Codegen
             llvm::Function *set_options;
         } gfortran_rt;
 
+        struct LLVMTypes
+        {
+            llvm::Type* i8;
+            llvm::Type* i16;
+            llvm::Type* i32;
+            llvm::Type* i64;
+
+            llvm::Type* void_;
+            llvm::Type* ptr_i8;
+            llvm::Type* ptr_i32;
+            llvm::Type* ptr_i64;
+        } llvm_types;
+
         std::map<llvm::Type*, FieldMap> fields;
 
       private:
         void initialize_llvm_context();
+        void initialize_llvm_types();
+        void initialize_gfortran_runtime();
 
         llvm::Type *get_llvm_type(TL::Type t);
 
@@ -171,6 +186,13 @@ namespace Codegen
         llvm::Value *constant_string(std::string &str);
 
         llvm::Value *compute_sizeof(Nodecl::NodeclBase n);
+
+        llvm::Constant* getIntegerValueN(int64_t v, llvm::Type* t, int bits);
+
+        llvm::Constant* getIntegerValue(int64_t v, TL::Type t);
+
+        llvm::Constant* getIntegerValue32(int64_t v);
+        llvm::Constant* getIntegerValue64(int64_t v);
 
         void emit_main(llvm::Function *fortran_program);
 

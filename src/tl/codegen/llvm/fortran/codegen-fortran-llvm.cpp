@@ -113,7 +113,7 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
     {
         mangled_name = "MAIN__";
         function_type = llvm::FunctionType::get(
-            llvm::Type::getVoidTy(llvm_context), {}, /* isVarArg */ false);
+            llvm_types.void_, {}, /* isVarArg */ false);
     }
     else
     {
@@ -246,10 +246,7 @@ void FortranLLVM::visit(const Nodecl::ForStatement& node)
     llvm::Value* vupper = visit_expression(upper);
     llvm::Value* vstep;
     if (step.is_null())
-        vstep = llvm::Constant::getIntegerValue(
-                get_llvm_type(ind_var.get_symbol().get_type()),
-                llvm::APInt(ind_var.get_type().get_size() * 8, // FIXME
-                    1, /* signed */ true));
+        vstep = getIntegerValue(1, ind_var.get_symbol().get_type());
     else
         vstep = visit_expression(step);
 
@@ -395,14 +392,12 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     // void visit(const Nodecl::Text& node);
     // void visit(const Nodecl::StructuredValue& node);
     // void visit(const Nodecl::BooleanLiteral& node);
-    void visit(const Nodecl::IntegerLiteral& node)
+    void visit(const Nodecl::IntegerLiteral &node)
     {
-        // FIXME: INTEGER(16) ?
-        value = llvm::Constant::getIntegerValue(
-                llvm_visitor->get_llvm_type(node.get_type()),
-                llvm::APInt(node.get_type().get_size() * 8, // FIXME
-                    const_value_cast_to_8(node.get_constant()),
-                    /* signed */ true));
+        value = llvm_visitor->getIntegerValue(
+            // FIXME: INTEGER(16)
+            const_value_cast_to_8(node.get_constant()),
+            node.get_type());
     }
     // void visit(const Nodecl::ComplexLiteral& node);
     // void visit(const Nodecl::FloatingLiteral& node);
@@ -468,15 +463,11 @@ llvm::Value *FortranLLVM::compute_sizeof(Nodecl::NodeclBase n)
     if (n.get_type().is_array())
     {
         // FIXME: The array may be nonconstant in size, use a visitor in such case
-        return llvm::Constant::getIntegerValue(
-            llvm::Type::getInt32Ty(llvm_context),
-            llvm::APInt(32, n.get_type().get_size(), /* signed */ true));
+        return getIntegerValue32(n.get_type().get_size());
     }
     else
     {
-        return llvm::Constant::getIntegerValue(
-                llvm::Type::getInt32Ty(llvm_context),
-                llvm::APInt(32, n.get_type().get_size(), /* signed */ true));
+        return getIntegerValue32(n.get_type().get_size());
     }
 }
 
@@ -513,7 +504,7 @@ llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
     }
     else if (t.is_void())
     {
-        return llvm::Type::getVoidTy(llvm_context);
+        return llvm_types.void_;
     }
     else
     {
@@ -557,21 +548,15 @@ void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
             ir_builder->CreateGlobalStringPtr(node.get_filename()),
         gep_for_field(
             gfortran_rt.st_parameter_dt, dt_parm, { "common", "filename" }));
-    ir_builder->CreateStore(
-        llvm::Constant::getIntegerValue(
-            llvm::Type::getInt32Ty(llvm_context),
-            llvm::APInt(32, node.get_line(), /* signed */ true)),
-        gep_for_field(
-            gfortran_rt.st_parameter_dt, dt_parm, { "common", "line" }));
-    ir_builder->CreateStore(
-        llvm::Constant::getIntegerValue(
-            llvm::Type::getInt32Ty(llvm_context),
-            llvm::APInt(32, 128, /* signed */ true)),
-        gep_for_field(
-            gfortran_rt.st_parameter_dt, dt_parm, { "common", "flags" }));
-    ir_builder->CreateStore(llvm::Constant::getIntegerValue(
-                                llvm::Type::getInt32Ty(llvm_context),
-                                llvm::APInt(32, 6, /* signed */ true)),
+    ir_builder->CreateStore(getIntegerValue32(node.get_line()),
+                            gep_for_field(gfortran_rt.st_parameter_dt,
+                                          dt_parm,
+                                          { "common", "line" }));
+    ir_builder->CreateStore(getIntegerValue32(128),
+                            gep_for_field(gfortran_rt.st_parameter_dt,
+                                          dt_parm,
+                                          { "common", "flags" }));
+    ir_builder->CreateStore(getIntegerValue32(6),
                             gep_for_field(gfortran_rt.st_parameter_dt,
                                           dt_parm,
                                           { "common", "unit" }));
@@ -613,16 +598,25 @@ llvm::Value *FortranLLVM::gep_for_field(
     {
         int idx = fields[t][f];
 
-        index_list.push_back(
-                llvm::Constant::getIntegerValue(
-                    llvm::Type::getInt32Ty(llvm_context),
-                    llvm::APInt(32, idx, /* signed */ false)));
+        index_list.push_back(getIntegerValue32(idx));
 
         t = llvm::cast<llvm::StructType>(t)->elements()[idx];
     }
 
     return ir_builder->CreatePointerCast(
         ir_builder->CreateGEP(addr, index_list), t->getPointerTo());
+}
+
+void FortranLLVM::initialize_llvm_types()
+{
+    llvm_types.i8 = llvm::Type::getInt8Ty(llvm_context);
+    llvm_types.i16 = llvm::Type::getInt16Ty(llvm_context);
+    llvm_types.i32 = llvm::Type::getInt32Ty(llvm_context);
+    llvm_types.i64 = llvm::Type::getInt64Ty(llvm_context);
+    llvm_types.void_ = llvm::Type::getVoidTy(llvm_context);
+    llvm_types.ptr_i8 = llvm::Type::getInt8PtrTy(llvm_context);
+    llvm_types.ptr_i32 = llvm::Type::getInt32PtrTy(llvm_context);
+    llvm_types.ptr_i64 = llvm::Type::getInt64PtrTy(llvm_context);
 }
 
 // Based on ioparm.def from gfortran
@@ -657,52 +651,55 @@ llvm::Value *FortranLLVM::gep_for_field(
   IOPARM (dt,      sign,		1 << 24, char1) \
  IOPARM_END(dt)
 
-void FortranLLVM::initialize_llvm_context()
+void FortranLLVM::initialize_gfortran_runtime()
 {
     typedef std::vector<llvm::Type *> TL;
-    auto f_ioparm_type_int4 = [&,this](TL &t)
+    auto f_ioparm_type_int4 = [&, this](TL &t)
     {
-        t.push_back(llvm::Type::getInt32Ty(llvm_context));
+        t.push_back(llvm_types.i32);
     };
     auto f_ioparm_type_intio = f_ioparm_type_int4;
-    auto f_ioparm_type_pint4 = [&,this](TL &t)
+    auto f_ioparm_type_pint4 = [&, this](TL &t)
     {
-        t.push_back(llvm::Type::getInt32PtrTy(llvm_context));
+        t.push_back(llvm_types.ptr_i32);
     };
-    auto f_ioparm_type_pchar = [&,this](TL &t)
+    auto f_ioparm_type_pchar = [&, this](TL &t)
     {
-        t.push_back(llvm::Type::getInt8PtrTy(llvm_context));
+        t.push_back(llvm_types.ptr_i8);
     };
-    auto f_ioparm_type_char1 = [&,this](TL &t)
+    auto f_ioparm_type_char1 = [&, this](TL &t)
     {
-        t.push_back(llvm::Type::getInt32Ty(llvm_context));
+        t.push_back(llvm_types.i32);
         f_ioparm_type_pchar(t);
     };
-    auto f_ioparm_type_char2 = [&,this](TL &t)
+    auto f_ioparm_type_char2 = [&, this](TL &t)
     {
         f_ioparm_type_pchar(t);
-        t.push_back(llvm::Type::getInt32Ty(llvm_context));
+        t.push_back(llvm_types.i32);
     };
-    auto f_ioparm_type_pintio = [&,this](TL &t)
+    auto f_ioparm_type_pintio = [&, this](TL &t)
     {
-        t.push_back(llvm::Type::getInt64Ty(llvm_context));
+        t.push_back(llvm_types.i64);
     };
     auto f_ioparm_type_parray = f_ioparm_type_pchar;
-    auto f_ioparm_type_pad = [&,this](TL &t)
+    auto f_ioparm_type_pad = [&, this](TL &t)
     {
         // FIXME: This should use the datalayout of the current target
         uint64_t size = 16 * sizeof(char *) + 32 * sizeof(int);
-        t.push_back(llvm::ArrayType::get(llvm::Type::getInt8Ty(llvm_context), size));
+        t.push_back(
+            llvm::ArrayType::get(llvm_types.i8, size));
     };
 
 
-#define IOPARM_START(name) \
-    std::vector<llvm::Type*> name##_elements;
-#define IOPARM_END(name) \
-    llvm::Type *ioparm_type_##name = llvm::StructType::create(llvm_context, name##_elements, "st_parameter_" #name); \
-    __attribute__((unused)) auto f_ioparm_type_##name = [&,this](TL &t){ t.push_back(ioparm_type_##name); };
-#define IOPARM(name, _, __, type) \
-    f_ioparm_type_##type(name##_elements);
+#define IOPARM_START(name) std::vector<llvm::Type *> name##_elements;
+#define IOPARM_END(name)                                                 \
+    llvm::Type *ioparm_type_##name = llvm::StructType::create(           \
+        llvm_context, name##_elements, "st_parameter_" #name);           \
+    __attribute__((unused)) auto f_ioparm_type_##name = [&, this](TL &t) \
+    {                                                                    \
+        t.push_back(ioparm_type_##name);                                 \
+    };
+#define IOPARM(name, _, __, type) f_ioparm_type_##type(name##_elements);
     IOPARM_LIST_FIELDS
 #undef IOPARM
 #undef IOPARM_END
@@ -711,7 +708,7 @@ void FortranLLVM::initialize_llvm_context()
 #define IOPARM_START(name)
 #define IOPARM_END(name)
 #define IOPARM(name, field_name, _, __) \
-        fields[ioparm_type_##name].add_field(#field_name);
+    fields[ioparm_type_##name].add_field(#field_name);
     IOPARM_LIST_FIELDS
 #undef IOPARM
 #undef IOPARM_END
@@ -721,82 +718,76 @@ void FortranLLVM::initialize_llvm_context()
     this->gfortran_rt.st_parameter_dt = ioparm_type_dt;
 
     this->gfortran_rt.st_write = llvm::Function::Create(
-        llvm::FunctionType::get(llvm::Type::getVoidTy(llvm_context),
-                                { gfortran_rt.st_parameter_dt->getPointerTo() }, 
+        llvm::FunctionType::get(llvm_types.void_,
+                                { gfortran_rt.st_parameter_dt->getPointerTo() },
                                 /* isVarArg */ false),
         llvm::GlobalValue::ExternalLinkage,
         "_gfortran_st_write",
         current_module.get());
 
     this->gfortran_rt.transfer_character_write = llvm::Function::Create(
-        llvm::FunctionType::get(llvm::Type::getVoidTy(llvm_context),
+        llvm::FunctionType::get(llvm_types.void_,
                                 { gfortran_rt.st_parameter_dt->getPointerTo(),
-                                  llvm::Type::getInt8PtrTy(llvm_context),
-                                  llvm::Type::getInt32Ty(llvm_context) },
+                                  llvm_types.ptr_i8,
+                                  llvm_types.i32 },
                                 /* isVarArg */ false),
         llvm::GlobalValue::ExternalLinkage,
         "_gfortran_transfer_character_write",
         current_module.get());
 
     // this->gfortran_rt.transfer_integer_write = llvm::Function::Create(
-    //     st_write_type, GlobalValue::ExternalLinkage, "_gfortran_transfer_integer_write");
+    //     st_write_type, GlobalValue::ExternalLinkage,
+    //     "_gfortran_transfer_integer_write");
 
     // this->gfortran_rt.transfer_integer_write = llvm::Function::Create(
-    //     st_write_type, GlobalValue::ExternalLinkage, "_gfortran_transfer_real_write");
+    //     st_write_type, GlobalValue::ExternalLinkage,
+    //     "_gfortran_transfer_real_write");
 
     this->gfortran_rt.st_write_done = llvm::Function::Create(
-        llvm::FunctionType::get(llvm::Type::getVoidTy(llvm_context),
-                                { gfortran_rt.st_parameter_dt->getPointerTo() }, /* isVarArg */ false),
+        llvm::FunctionType::get(llvm_types.void_,
+                                { gfortran_rt.st_parameter_dt->getPointerTo() },
+                                /* isVarArg */ false),
         llvm::GlobalValue::ExternalLinkage,
         "_gfortran_st_write_done",
         current_module.get());
 
     this->gfortran_rt.set_args = llvm::Function::Create(
         llvm::FunctionType::get(
-            llvm::Type::getVoidTy(llvm_context),
-            { llvm::Type::getInt32Ty(llvm_context),
-              llvm::Type::getInt8PtrTy(llvm_context)->getPointerTo() },
+            llvm_types.void_,
+            { llvm_types.i32,
+              llvm_types.ptr_i8->getPointerTo() },
             /* isVarArg */ false),
         llvm::GlobalValue::ExternalLinkage,
         "_gfortran_set_args",
         current_module.get());
 
     this->gfortran_rt.set_options = llvm::Function::Create(
-        llvm::FunctionType::get(
-            llvm::Type::getVoidTy(llvm_context),
-            { llvm::Type::getInt32Ty(llvm_context),
-              llvm::Type::getInt32PtrTy(llvm_context) },
-            /* isVarArg */ false),
+        llvm::FunctionType::get(llvm_types.void_,
+                                { llvm_types.i32,
+                                  llvm_types.ptr_i32 },
+                                /* isVarArg */ false),
         llvm::GlobalValue::ExternalLinkage,
         "_gfortran_set_options",
         current_module.get());
 }
 
+void FortranLLVM::initialize_llvm_context()
+{
+    initialize_llvm_types();
+    initialize_gfortran_runtime();
+}
+
 void FortranLLVM::emit_main(llvm::Function *fortran_program)
 {
+    // FIXME - This is hardcoded
+    // FIXME - Move this to initialize_gfortran_runtime
     // static integer(kind=4) options.1[9] = {68, 1023, 0, 0, 1, 1, 0, 0, 31};
-    //
     llvm::ArrayType *options_type
-        = llvm::ArrayType::get(llvm::Type::getInt32Ty(llvm_context), 9);
+        = llvm::ArrayType::get(llvm_types.i32, 9);
     std::vector<llvm::Constant *> options_values{
-        llvm::Constant::getIntegerValue(llvm::Type::getInt32Ty(llvm_context),
-                                        llvm::APInt(32, 68)),
-        llvm::Constant::getIntegerValue(llvm::Type::getInt32Ty(llvm_context),
-                                        llvm::APInt(32, 1023)),
-        llvm::Constant::getIntegerValue(llvm::Type::getInt32Ty(llvm_context),
-                                        llvm::APInt(32, 0)),
-        llvm::Constant::getIntegerValue(llvm::Type::getInt32Ty(llvm_context),
-                                        llvm::APInt(32, 0)),
-        llvm::Constant::getIntegerValue(llvm::Type::getInt32Ty(llvm_context),
-                                        llvm::APInt(32, 1)),
-        llvm::Constant::getIntegerValue(llvm::Type::getInt32Ty(llvm_context),
-                                        llvm::APInt(32, 1)),
-        llvm::Constant::getIntegerValue(llvm::Type::getInt32Ty(llvm_context),
-                                        llvm::APInt(32, 0)),
-        llvm::Constant::getIntegerValue(llvm::Type::getInt32Ty(llvm_context),
-                                        llvm::APInt(32, 0)),
-        llvm::Constant::getIntegerValue(llvm::Type::getInt32Ty(llvm_context),
-                                        llvm::APInt(32, 31))
+        getIntegerValue32(68), getIntegerValue32(1023), getIntegerValue32(0),
+        getIntegerValue32(0),  getIntegerValue32(1),    getIntegerValue32(1),
+        getIntegerValue32(0),  getIntegerValue32(0),    getIntegerValue32(31)
     };
 
     llvm::GlobalVariable *options = new llvm::GlobalVariable(
@@ -809,9 +800,9 @@ void FortranLLVM::emit_main(llvm::Function *fortran_program)
     llvm::Constant *c = current_module->getOrInsertFunction(
         "main",
         llvm::FunctionType::get(
-            llvm::Type::getInt32Ty(llvm_context),
-            { llvm::Type::getInt32Ty(llvm_context),
-              llvm::Type::getInt8PtrTy(llvm_context)->getPointerTo() },
+            llvm_types.i32,
+            { llvm_types.i32,
+              llvm_types.ptr_i8->getPointerTo() },
             /* isVarArg */ false),
         /* no attributes so far */ llvm::AttributeSet());
 
@@ -829,17 +820,36 @@ void FortranLLVM::emit_main(llvm::Function *fortran_program)
 
     ir_builder->CreateCall(
         gfortran_rt.set_options,
-        { llvm::Constant::getIntegerValue(llvm::Type::getInt32Ty(llvm_context),
-                                          llvm::APInt(32, 9)),
-          ir_builder->CreatePointerCast(
-              options, llvm::Type::getInt32PtrTy(llvm_context)) });
+        { getIntegerValue32(9),
+          ir_builder->CreatePointerCast(options, llvm_types.ptr_i32) });
 
     ir_builder->CreateCall(fortran_program, {});
 
-    ir_builder->CreateRet(llvm::Constant::getIntegerValue(
-        llvm::Type::getInt32Ty(llvm_context), llvm::APInt(32, 0)));
+    ir_builder->CreateRet(getIntegerValue32(0));
     clear_current_function();
 }
+
+llvm::Constant *FortranLLVM::getIntegerValueN(int64_t v, llvm::Type* t, int bits)
+{
+    return llvm::Constant::getIntegerValue(t, llvm::APInt(bits, v, /* signed */ 1));
+}
+
+llvm::Constant *FortranLLVM::getIntegerValue(int64_t v, TL::Type t)
+{
+    ERROR_CONDITION(t.is_signed_integral(), "Must be a signed integral", 0);
+    return getIntegerValueN(v, get_llvm_type(t), t.get_size() * 8);
+}
+
+llvm::Constant *FortranLLVM::getIntegerValue32(int64_t v)
+{
+    return getIntegerValueN(v, llvm_types.i32, 32);
+}
+
+llvm::Constant *FortranLLVM::getIntegerValue64(int64_t v)
+{
+    return getIntegerValueN(int64_t(v), llvm_types.i64, 64);
+}
+
 }
 
 
