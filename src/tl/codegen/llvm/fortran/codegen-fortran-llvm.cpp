@@ -126,6 +126,7 @@ void FortranLLVM::visit(const Nodecl::TopLevel &node)
         new llvm::IRBuilder<>(llvm_context));
 
     initialize_llvm_context();
+
     walk(node.get_top_level());
 
     llvm::raw_os_ostream ros(*file);
@@ -629,6 +630,8 @@ llvm::Value *FortranLLVM::gep_for_field(
 
     llvm::Type *t = struct_type;
     std::vector<llvm::Value*> index_list;
+    index_list.reserve(access_fields.size() + 1);
+    index_list.push_back(getIntegerValue32(0));
     for (const auto &f : access_fields)
     {
         int idx = fields[t][f];
@@ -638,8 +641,7 @@ llvm::Value *FortranLLVM::gep_for_field(
         t = llvm::cast<llvm::StructType>(t)->elements()[idx];
     }
 
-    return ir_builder->CreatePointerCast(
-        ir_builder->CreateGEP(addr, index_list), t->getPointerTo());
+    return ir_builder->CreateGEP(addr, index_list);
 }
 
 void FortranLLVM::initialize_llvm_types()
