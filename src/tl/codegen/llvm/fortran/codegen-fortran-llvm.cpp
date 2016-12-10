@@ -420,7 +420,6 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     // void visit(const Nodecl::Range& node);
     void visit(const Nodecl::StringLiteral& node)
     {
-        // FIXME: Quotes
         std::string str = node.get_text();
         str = str.substr(1, str.size() - 2);
         value = llvm_visitor->ir_builder->CreateGlobalStringPtr(str);
@@ -464,7 +463,32 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     // void visit(const Nodecl::Dereference& node);
     // void visit(const Nodecl::Reference& node);
     // void visit(const Nodecl::ParenthesizedExpression& node);
-    // void visit(const Nodecl::ArraySubscript& node);
+    void visit(const Nodecl::ArraySubscript& node)
+    {
+        Nodecl::NodeclBase subscripted = node.get_subscripted();
+        TL::Type subscripted_type = subscripted.get_type();
+        TL::Type subscripted_type_noref = subscripted_type.no_ref();
+
+        ERROR_CONDITION(!subscripted_type_noref.is_array(),
+                "Expecting an array here", 0);
+
+        if (subscripted_type_noref.array_requires_descriptor()
+                || subscripted_type_noref.array_is_vla())
+            internal_error("Not implemented yet", 0);
+
+        Nodecl::List subscripts = node.get_subscripts().as<Nodecl::List>();
+        std::vector<llvm::Value*> index_list;
+        index_list.reserve(subscripts.size() + 1);
+        index_list.push_back(llvm_visitor->getIntegerValue32(0));
+        for (Nodecl::NodeclBase index : subscripts)
+        {
+            llvm::Value *idx = llvm_visitor->eval_expression(index);
+            index_list.push_back(idx);
+        }
+
+        llvm::Value* subscripted_val = llvm_visitor->eval_expression(subscripted);
+        value = llvm_visitor->ir_builder->CreateGEP(subscripted_val, index_list);
+    }
     // void visit(const Nodecl::FunctionCall& node);
     // void visit(const Nodecl::FortranActualArgument& node);
     // void visit(const Nodecl::FortranIoSpec& node);
@@ -581,6 +605,17 @@ llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
     else if (t.is_void())
     {
         return llvm_types.void_;
+    }
+    else if (t.is_array()
+            && !t.array_requires_descriptor()
+            && !t.array_is_vla())
+    {
+        // Statically sized arrays
+        Nodecl::NodeclBase size = t.array_get_size();
+        ERROR_CONDITION(!size.is_constant(), "Invalid size", 0);
+
+        return llvm::ArrayType::get(get_llvm_type(t.array_element()),
+                                    const_value_cast_to_8(size.get_constant()));
     }
     else
     {
@@ -785,10 +820,10 @@ void FortranLLVM::initialize_gfortran_runtime()
     auto f_ioparm_type_parray = f_ioparm_type_pchar;
     auto f_ioparm_type_pad = [&, this](TL &t)
     {
-        // FIXME: This should use the datalayout of the current target
-        uint64_t size = 16 * sizeof(char *) + 32 * sizeof(int);
-        t.push_back(
-            llvm::ArrayType::get(llvm_types.i8, size));
+        const llvm::DataLayout &dl = current_module->getDataLayout();
+        uint64_t size = 16 * dl.getPointerTypeSize(llvm_types.ptr_i8)
+                        + 32 * dl.getTypeAllocSize(llvm_types.i32);
+        t.push_back(llvm::ArrayType::get(llvm_types.i8, size));
     };
 
 
