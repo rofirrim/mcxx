@@ -6,7 +6,7 @@ options = --width=0
 fortran_preprocessor_name = @GFORTRAN@
 fortran_preprocessor_options = -cpp -E
 compiler_name = @LLVM_BINDIR@/clang
-compiler_options =
+compiler_options = -fPIC
 linker_name = @GFORTRAN@
 linker_options =
 codegen_phase = libcodegen-fortran-llvm.so 
