@@ -132,7 +132,7 @@ void FortranLLVM::visit(const Nodecl::TopLevel &node)
     llvm::raw_os_ostream ros(*file);
     current_module->print(ros,
                           /* AssemblyAnnotationWriter */ nullptr);
-    current_module->dump();
+    // current_module->dump();
 
     std::swap(old_module, current_module);
 }
@@ -225,7 +225,7 @@ void FortranLLVM::visit(const Nodecl::IfElseStatement& node)
     Nodecl::NodeclBase then_node = node.get_then();
     Nodecl::NodeclBase else_node = node.get_else();
 
-    llvm::Value *cond_val = visit_expression(condition);
+    llvm::Value *cond_val = eval_expression(condition);
 
     llvm::BasicBlock * block_true = llvm::BasicBlock::Create(llvm_context, "if.true", get_current_function());
     llvm::BasicBlock * block_end = llvm::BasicBlock::Create(llvm_context, "if.end", get_current_function());
@@ -277,14 +277,14 @@ void FortranLLVM::visit(const Nodecl::ForStatement& node)
     else
         internal_error("Not yet implemented", 0);
 
-    llvm::Value* vind_var = visit_expression(ind_var);
-    llvm::Value* vlower = visit_expression(lower);
-    llvm::Value* vupper = visit_expression(upper);
+    llvm::Value* vind_var = eval_expression(ind_var);
+    llvm::Value* vlower = eval_expression(lower);
+    llvm::Value* vupper = eval_expression(upper);
     llvm::Value* vstep;
     if (step.is_null())
         vstep = getIntegerValue(1, ind_var.get_symbol().get_type());
     else
-        vstep = visit_expression(step);
+        vstep = eval_expression(step);
 
     ir_builder->CreateStore(vlower, vind_var);
 
@@ -312,8 +312,8 @@ void FortranLLVM::visit(const Nodecl::ForStatement& node)
 
 void FortranLLVM::visit(const Nodecl::Assignment &node)
 {
-    llvm::Value *vlhs = visit_expression(node.get_lhs());
-    llvm::Value *vrhs = visit_expression(node.get_rhs());
+    llvm::Value *vlhs = eval_expression(node.get_lhs());
+    llvm::Value *vrhs = eval_expression(node.get_rhs());
 
     ir_builder->CreateStore(vrhs, vlhs);
 }
@@ -357,7 +357,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     {
         // A conversion coalesces more than one conversion including a "load"
         // For now just check that this is a pure load
-        llvm::Value *vnest = llvm_visitor->visit_expression(node.get_nest());
+        llvm::Value *vnest = llvm_visitor->eval_expression(node.get_nest());
         bool is_load = 
             node.get_type().is_same_type(node.get_nest().get_type().no_ref());
         ERROR_CONDITION(!is_load, "Not yet implemented", 0);
@@ -376,8 +376,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     {
         if (node.get_type().is_signed_integral())
         {
-            llvm::Value *vlhs = llvm_visitor->visit_expression(node.get_lhs());
-            llvm::Value *vrhs = llvm_visitor->visit_expression(node.get_rhs());
+            llvm::Value *vlhs = llvm_visitor->eval_expression(node.get_lhs());
+            llvm::Value *vrhs = llvm_visitor->eval_expression(node.get_rhs());
 
             value = llvm_visitor->ir_builder->CreateAdd(vlhs, vrhs);
         }
@@ -396,8 +396,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         if (node.get_lhs().get_type().is_signed_integral()
                 && node.get_rhs().get_type().is_signed_integral())
         {
-            llvm::Value *vlhs = llvm_visitor->visit_expression(node.get_lhs());
-            llvm::Value *vrhs = llvm_visitor->visit_expression(node.get_rhs());
+            llvm::Value *vlhs = llvm_visitor->eval_expression(node.get_lhs());
+            llvm::Value *vrhs = llvm_visitor->eval_expression(node.get_rhs());
 
             value = llvm_visitor->ir_builder->CreateICmpSGT(
                     vlhs,
@@ -435,8 +435,29 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             const_value_cast_to_8(node.get_constant()),
             node.get_type());
     }
+
     // void visit(const Nodecl::ComplexLiteral& node);
-    // void visit(const Nodecl::FloatingLiteral& node);
+    void visit(const Nodecl::FloatingLiteral& node)
+    {
+        TL::Type t = node.get_type();
+        if (t.is_float())
+        {
+            value = llvm::ConstantFP::get(
+                llvm_visitor->llvm_context,
+                llvm::APFloat(const_value_cast_to_float(node.get_constant())));
+        }
+        else if (t.is_double())
+        {
+            value = llvm::ConstantFP::get(
+                llvm_visitor->llvm_context,
+                llvm::APFloat(const_value_cast_to_double(node.get_constant())));
+        }
+        else
+        {
+            internal_error("Unexpected type '%s'",
+                           print_declarator(t.get_internal_type()));
+        }
+    }
     // void visit(const Nodecl::Symbol& node);
     // void visit(const Nodecl::Equal& node);
     // void visit(const Nodecl::Different& node);
@@ -482,11 +503,30 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 };
 
 
-llvm::Value *FortranLLVM::visit_expression(Nodecl::NodeclBase n)
+llvm::Value *FortranLLVM::eval_expression(Nodecl::NodeclBase n)
 {
     FortranVisitorLLVMExpression v(this);
     v.walk(n);
     return v.get_value();
+}
+
+llvm::Value *FortranLLVM::make_temporary(llvm::Value *v)
+{
+    llvm::Value *tmp
+        = ir_builder->CreateAlloca(v->getType(), /* array_size */ nullptr);
+    ir_builder->CreateStore(v, tmp);
+    return tmp;
+}
+
+llvm::Value *FortranLLVM::eval_expression_to_memory(Nodecl::NodeclBase n)
+{
+    FortranVisitorLLVMExpression v(this);
+    v.walk(n);
+    llvm::Value *result = v.get_value();
+    if (!n.get_type().is_any_reference())
+        result = make_temporary(result);
+
+    return result;
 }
 
 // class FortranVisitorLLVMExpressionSizeof : public FortranVisitorLLVMExpressionBase
@@ -494,17 +534,9 @@ llvm::Value *FortranLLVM::visit_expression(Nodecl::NodeclBase n)
 // };
 
 // FIXME - Maybe this should return i64?
-llvm::Value *FortranLLVM::compute_sizeof(Nodecl::NodeclBase n)
+llvm::Value *FortranLLVM::eval_sizeof(Nodecl::NodeclBase n)
 {
-    if (n.get_type().is_array())
-    {
-        // FIXME: The array may be nonconstant in size, use a visitor in such case
-        return getIntegerValue32(n.get_type().get_size());
-    }
-    else
-    {
-        return getIntegerValue32(n.get_type().get_size());
-    }
+    return getIntegerValue32(n.get_type().no_ref().get_size());
 }
 
 llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
@@ -537,6 +569,14 @@ llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
     else if (t.is_signed_integral() || t.is_bool())
     {
         return llvm::IntegerType::get(llvm_context, t.get_size() * 8);
+    }
+    else if (t.is_float())
+    {
+        return llvm_types.f32;
+    }
+    else if (t.is_double())
+    {
+        return llvm_types.f64;
     }
     else if (t.is_void())
     {
@@ -606,10 +646,29 @@ void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
         TL::Type t = n.get_type();
         if (fortran_is_character_type(t.get_internal_type()))
         {
-            llvm::Value *expr = visit_expression(n);
+            llvm::Value *expr = eval_expression(n);
 
             ir_builder->CreateCall(gfortran_rt.transfer_character_write,
-                                   { dt_parm, expr, compute_sizeof(n) });
+                                   { dt_parm, expr, eval_sizeof(n) });
+        }
+        else if (t.no_ref().is_signed_integral())
+        {
+            llvm::Value *expr = eval_expression_to_memory(n);
+
+            expr = ir_builder->CreatePointerCast(expr, llvm_types.ptr_i8);
+
+            ir_builder->CreateCall(gfortran_rt.transfer_integer_write,
+                                   { dt_parm, expr, eval_sizeof(n) });
+        }
+        else if (t.no_ref().is_float()
+                || t.no_ref().is_double())
+        {
+            llvm::Value *expr = eval_expression_to_memory(n);
+
+            expr = ir_builder->CreatePointerCast(expr, llvm_types.ptr_i8);
+
+            ir_builder->CreateCall(gfortran_rt.transfer_real_write,
+                                   { dt_parm, expr, eval_sizeof(n) });
         }
         else
         {
@@ -650,7 +709,12 @@ void FortranLLVM::initialize_llvm_types()
     llvm_types.i16 = llvm::Type::getInt16Ty(llvm_context);
     llvm_types.i32 = llvm::Type::getInt32Ty(llvm_context);
     llvm_types.i64 = llvm::Type::getInt64Ty(llvm_context);
+
+    llvm_types.f32 = llvm::Type::getFloatTy(llvm_context);
+    llvm_types.f64 = llvm::Type::getDoubleTy(llvm_context);
+
     llvm_types.void_ = llvm::Type::getVoidTy(llvm_context);
+
     llvm_types.ptr_i8 = llvm::Type::getInt8PtrTy(llvm_context);
     llvm_types.ptr_i32 = llvm::Type::getInt32PtrTy(llvm_context);
     llvm_types.ptr_i64 = llvm::Type::getInt64PtrTy(llvm_context);
@@ -772,13 +836,25 @@ void FortranLLVM::initialize_gfortran_runtime()
         "_gfortran_transfer_character_write",
         current_module.get());
 
-    // this->gfortran_rt.transfer_integer_write = llvm::Function::Create(
-    //     st_write_type, GlobalValue::ExternalLinkage,
-    //     "_gfortran_transfer_integer_write");
+    this->gfortran_rt.transfer_integer_write = llvm::Function::Create(
+        llvm::FunctionType::get(llvm_types.void_,
+                                { gfortran_rt.st_parameter_dt->getPointerTo(),
+                                  llvm_types.ptr_i8,
+                                  llvm_types.i32 },
+                                /* isVarArg */ false),
+        llvm::GlobalValue::ExternalLinkage,
+        "_gfortran_transfer_integer_write",
+        current_module.get());
 
-    // this->gfortran_rt.transfer_integer_write = llvm::Function::Create(
-    //     st_write_type, GlobalValue::ExternalLinkage,
-    //     "_gfortran_transfer_real_write");
+    this->gfortran_rt.transfer_real_write = llvm::Function::Create(
+        llvm::FunctionType::get(llvm_types.void_,
+                                { gfortran_rt.st_parameter_dt->getPointerTo(),
+                                  llvm_types.ptr_i8,
+                                  llvm_types.i32 },
+                                /* isVarArg */ false),
+        llvm::GlobalValue::ExternalLinkage,
+        "_gfortran_transfer_real_write",
+        current_module.get());
 
     this->gfortran_rt.st_write_done = llvm::Function::Create(
         llvm::FunctionType::get(llvm_types.void_,

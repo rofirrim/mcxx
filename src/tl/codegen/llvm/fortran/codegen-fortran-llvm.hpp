@@ -105,6 +105,8 @@ namespace Codegen
 
             llvm::Function *st_write;
             llvm::Function *transfer_character_write;
+            llvm::Function *transfer_integer_write;
+            llvm::Function *transfer_real_write;
             llvm::Function *st_write_done;
 
             llvm::Function *set_args;
@@ -117,6 +119,9 @@ namespace Codegen
             llvm::Type* i16;
             llvm::Type* i32;
             llvm::Type* i64;
+
+            llvm::Type* f32;
+            llvm::Type* f64;
 
             llvm::Type* void_;
             llvm::Type* ptr_i8;
@@ -133,7 +138,15 @@ namespace Codegen
 
         llvm::Type *get_llvm_type(TL::Type t);
 
-        llvm::Value *visit_expression(Nodecl::NodeclBase n);
+        // Evaluates a Fortran expression
+        llvm::Value *eval_expression(Nodecl::NodeclBase n);
+
+        // Evaluates a Fortran expression but if it was not a lvalue reference
+        // then it creates a temporary for it. Uses make_temporary
+        llvm::Value *eval_expression_to_memory(Nodecl::NodeclBase n);
+
+        // Promotes an expression known to just yield a value to a temporary
+        llvm::Value *make_temporary(llvm::Value *v);
 
         // Map symbols to llvm::Value*
         void clear_mappings()
@@ -185,7 +198,8 @@ namespace Codegen
 
         llvm::Value *constant_string(std::string &str);
 
-        llvm::Value *compute_sizeof(Nodecl::NodeclBase n);
+        // Compute the number of bytes used by an expression ignoring references
+        llvm::Value *eval_sizeof(Nodecl::NodeclBase n);
 
         llvm::Constant* getIntegerValueN(int64_t v, llvm::Type* t, int bits);
 
