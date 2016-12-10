@@ -22,8 +22,8 @@
   Cambridge, MA 02139, USA.
 --------------------------------------------------------------------*/
 
-#include "tl-compilerphase.hpp"
 #include "codegen-fortran-llvm.hpp"
+#include "tl-compilerphase.hpp"
 #include "fortran03-buildscope.h"
 #include "fortran03-scope.h"
 #include "fortran03-mangling.h"
@@ -192,10 +192,17 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
                     0);
 
     set_current_function(fun);
-    set_current_block(llvm::BasicBlock::Create(llvm_context, "entry", fun));
+    llvm::BasicBlock *entry_basic_block
+        = llvm::BasicBlock::Create(llvm_context, "entry", fun);
+    set_current_block(entry_basic_block);
+    push_allocating_block(entry_basic_block);
+
     walk(node.get_statements());
+
     // FIXME: Finish function. Use proper value!
     ir_builder->CreateRet(nullptr);
+
+    pop_allocating_block();
     clear_current_function();
 
     if (sym.is_fortran_main_program())
@@ -480,10 +487,24 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         std::vector<llvm::Value*> index_list;
         index_list.reserve(subscripts.size() + 1);
         index_list.push_back(llvm_visitor->getIntegerValue32(0));
+
+        TL::Type current_array_type = subscripted_type_noref;
         for (Nodecl::NodeclBase index : subscripts)
         {
-            llvm::Value *idx = llvm_visitor->eval_expression(index);
+            llvm::Value *idx = llvm_visitor->ir_builder->CreateSExtOrTrunc(
+                llvm_visitor->eval_expression(index),
+                llvm_visitor->llvm_types.i64);
+
+            Nodecl::NodeclBase lower, upper;
+            current_array_type.array_get_bounds(lower, upper);
+            llvm::Value *base = llvm_visitor->ir_builder->CreateSExtOrTrunc(
+                llvm_visitor->eval_expression(lower),
+                llvm_visitor->llvm_types.i64);
+
+            idx = llvm_visitor->ir_builder->CreateSub(idx, base);
             index_list.push_back(idx);
+
+            current_array_type = current_array_type.array_element();
         }
 
         llvm::Value* subscripted_val = llvm_visitor->eval_expression(subscripted);
@@ -534,10 +555,31 @@ llvm::Value *FortranLLVM::eval_expression(Nodecl::NodeclBase n)
     return v.get_value();
 }
 
+llvm::Value *FortranLLVM::create_alloca(llvm::Type *t,
+                                   llvm::Value *array_size,
+                                   const llvm::Twine &name)
+{
+    llvm::IRBuilderBase::InsertPoint savedIP = ir_builder->saveIP();
+
+    llvm::BasicBlock *alloca_bb = allocating_block();
+
+    // FIXME: I'm pretty sure it is possible to do this better.
+    llvm::BasicBlock::iterator bb_it = alloca_bb->begin();
+    while (bb_it != alloca_bb->end()
+            && llvm::isa<llvm::AllocaInst>(*bb_it))
+        bb_it++;
+
+    ir_builder->SetInsertPoint(alloca_bb, bb_it);
+    llvm::Value *tmp
+        = ir_builder->CreateAlloca(t, array_size, name);
+
+    ir_builder->restoreIP(savedIP);
+    return tmp;
+}
+
 llvm::Value *FortranLLVM::make_temporary(llvm::Value *v)
 {
-    llvm::Value *tmp
-        = ir_builder->CreateAlloca(v->getType(), /* array_size */ nullptr);
+    llvm::Value *tmp = create_alloca(v->getType());
     ir_builder->CreateStore(v, tmp);
     return tmp;
 }
@@ -632,10 +674,9 @@ void FortranLLVM::emit_variable(TL::Symbol sym)
     if (get_value(sym) != NULL)
         return;
 
-    llvm::Value *allocation
-        = ir_builder->CreateAlloca(get_llvm_type(sym.get_type()),
-                                   /* array_size */ nullptr,
-                                   sym.get_name());
+    llvm::Value *allocation = create_alloca(get_llvm_type(sym.get_type()),
+                                           /* array_size */ nullptr,
+                                           sym.get_name());
     map_symbol_to_value(sym, allocation);
 }
 
@@ -650,7 +691,7 @@ void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
 
     // Allocate data transfer structure
     llvm::Value *dt_parm
-        = ir_builder->CreateAlloca(gfortran_rt.st_parameter_dt, nullptr, "dt_parm");
+        = create_alloca(gfortran_rt.st_parameter_dt, nullptr, "dt_parm");
 
     // dt_parm.common.filename = "file";
     // dt_parm.common.line = "file";
@@ -957,7 +998,9 @@ void FortranLLVM::emit_main(llvm::Function *fortran_program)
     llvm::Function *fun = llvm::cast<llvm::Function>(c);
 
     set_current_function(fun);
-    set_current_block(llvm::BasicBlock::Create(llvm_context, "entry", fun));
+    llvm::BasicBlock *entry_basic_block = llvm::BasicBlock::Create(llvm_context, "entry", fun);
+    set_current_block(entry_basic_block);
+    push_allocating_block(entry_basic_block);
 
     std::vector<llvm::Value *> main_args;
     for (llvm::Argument &v : fun->args())
@@ -974,6 +1017,8 @@ void FortranLLVM::emit_main(llvm::Function *fortran_program)
     ir_builder->CreateCall(fortran_program, {});
 
     ir_builder->CreateRet(getIntegerValue32(0));
+
+    pop_allocating_block();
     clear_current_function();
 }
 

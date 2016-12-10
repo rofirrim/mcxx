@@ -189,6 +189,27 @@ namespace Codegen
             return function_info.current_block;
         }
 
+        // Basic block where we emit allocas
+        std::vector<llvm::BasicBlock*> stack_alloca_bb;
+        void push_allocating_block(llvm::BasicBlock *b)
+        {
+            stack_alloca_bb.emplace_back(b);
+        }
+        void pop_allocating_block()
+        {
+            ERROR_CONDITION(stack_alloca_bb.empty(), "Stack of allocating basic blocks is empty", 0);
+            stack_alloca_bb.pop_back();
+        }
+        llvm::BasicBlock* allocating_block()
+        {
+            ERROR_CONDITION(stack_alloca_bb.empty(), "Stack of allocating basic blocks is empty", 0);
+            return stack_alloca_bb.back();
+        }
+        // Intentionally similar to CreateAlloca but creates it in the allocating_block
+        llvm::Value *create_alloca(llvm::Type *t,
+                                   llvm::Value *array_size = nullptr,
+                                   const llvm::Twine &name = "");
+
         void emit_variable(TL::Symbol sym);
 
         llvm::Value *gep_for_field(
