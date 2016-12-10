@@ -42,11 +42,15 @@
 #include "cxx-lexer.h"
 #include "cxx-typeenviron.h"
 
-#include <llvm/Support/raw_os_ostream.h>
-#include <llvm/IR/Type.h>
-#include <llvm/IR/Value.h>
-#include <llvm/IR/Argument.h>
-#include <llvm/IR/Function.h>
+#include "llvm/Support/raw_os_ostream.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
+#include "llvm/IR/Argument.h"
+#include "llvm/IR/Function.h"
+#include "llvm/Support/TargetRegistry.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetOptions.h"
 
 namespace Codegen
 {
@@ -76,8 +80,25 @@ void FortranLLVM::codegen_cleanup()
 {
 }
 
+namespace
+{
+void ensure_llvm_initialized()
+{
+    static bool init = false;
+    if (!init)
+    {
+        llvm::InitializeAllTargetInfos();
+        llvm::InitializeAllTargets();
+        llvm::InitializeAllTargetMCs();
+        init = true;
+    }
+}
+}
+
 void FortranLLVM::visit(const Nodecl::TopLevel &node)
 {
+    ensure_llvm_initialized();
+
     std::unique_ptr<llvm::Module> old_module;
     std::swap(old_module, current_module);
 
@@ -85,7 +106,21 @@ void FortranLLVM::visit(const Nodecl::TopLevel &node)
         TL::CompilationProcess::get_current_file().get_filename(),
         llvm_context);
 
-    current_module->setTargetTriple(llvm::sys::getDefaultTargetTriple());
+    std::string default_triple = llvm::sys::getDefaultTargetTriple();
+    std::string error_message;
+    const llvm::Target *target = llvm::TargetRegistry::lookupTarget(default_triple, error_message);
+    if (target == NULL)
+        fatal_error("Cannot get a LLVM target for triple '%s' due to '%s'\n", default_triple.c_str(), error_message.c_str());
+
+    // Generic CPU, no special features or options
+    llvm::TargetOptions target_options;
+    llvm::Optional<llvm::Reloc::Model> reloc_model;
+    llvm::TargetMachine *target_machine = target->createTargetMachine(
+        default_triple, "generic", "", target_options, reloc_model);
+
+    // Set triple and data layout of the target machine
+    current_module->setTargetTriple(default_triple);
+    current_module->setDataLayout(target_machine->createDataLayout());
 
     ir_builder = std::unique_ptr<llvm::IRBuilder<> >(
         new llvm::IRBuilder<>(llvm_context));
