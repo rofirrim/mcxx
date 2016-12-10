@@ -59,6 +59,7 @@ namespace Codegen
         void visit(const Nodecl::Assignment &node);
         void visit(const Nodecl::IfElseStatement& node);
         void visit(const Nodecl::ForStatement& node);
+        void visit(const Nodecl::FortranPrintStatement& node);
 
       private:
         Codegen::FortranBase base;
@@ -74,11 +75,52 @@ namespace Codegen
             std::map<TL::Symbol, llvm::Value *> mapping;
         } function_info;
 
+        struct FieldMap
+        {
+            private:
+                typedef std::map<std::string, int> field_map_t;
+                field_map_t field_map;
+                int idx = 0;
+            public:
+                int operator[](const std::string& name)
+                {
+                    field_map_t::iterator it = field_map.find(name);
+                    ERROR_CONDITION(it == field_map.end(), "Invalid field name '%s'\n", name.c_str());
+
+                    return it->second;
+                }
+
+                void add_field(const std::string &str)
+                {
+                    field_map[str] = idx;
+                    idx++;
+                }
+        };
+
+        struct GfortranTypes
+        {
+            // Input/Output
+            llvm::Type* st_parameter_common;
+            llvm::Type* st_parameter_dt;
+
+            llvm::Function *st_write;
+            llvm::Function *transfer_character_write;
+            llvm::Function *st_write_done;
+
+            llvm::Function *set_args;
+            llvm::Function *set_options;
+        } gfortran_rt;
+
+        std::map<llvm::Type*, FieldMap> fields;
+
       private:
+        void initialize_llvm_context();
+
         llvm::Type *get_llvm_type(TL::Type t);
 
         llvm::Value *visit_expression(Nodecl::NodeclBase n);
 
+        // Map symbols to llvm::Value*
         void clear_mappings()
         {
             function_info.mapping.clear();
@@ -92,6 +134,7 @@ namespace Codegen
             return function_info.mapping[s];
         }
 
+        // Current function
         llvm::Function *get_current_function() 
         {
             return function_info.function;
@@ -105,6 +148,8 @@ namespace Codegen
         {
             function_info.function = nullptr;
         }
+
+        // Basic block
         void set_current_block(llvm::BasicBlock *bb)
         {
             ERROR_CONDITION(bb == NULL, "Invalid block", 0);
@@ -115,7 +160,19 @@ namespace Codegen
         {
             return function_info.current_block;
         }
+
         void emit_variable(TL::Symbol sym);
+
+        llvm::Value *gep_for_field(
+            llvm::Type *struct_type,
+            llvm::Value *addr,
+            const std::vector<std::string> &fields);
+
+        llvm::Value *constant_string(std::string &str);
+
+        llvm::Value *compute_sizeof(Nodecl::NodeclBase n);
+
+        void emit_main(llvm::Function *fortran_program);
 
         friend class FortranVisitorLLVMExpression;
     };
