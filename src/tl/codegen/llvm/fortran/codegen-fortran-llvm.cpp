@@ -873,7 +873,7 @@ llvm::Constant *FortranLLVM::getIntegerValueN(int64_t v, llvm::Type* t, int bits
 
 llvm::Constant *FortranLLVM::getIntegerValue(int64_t v, TL::Type t)
 {
-    ERROR_CONDITION(t.is_signed_integral(), "Must be a signed integral", 0);
+    ERROR_CONDITION(!t.is_signed_integral(), "Must be a signed integral", 0);
     return getIntegerValueN(v, get_llvm_type(t), t.get_size() * 8);
 }
 
