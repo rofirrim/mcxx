@@ -199,8 +199,22 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
 
     walk(node.get_statements());
 
-    // FIXME: Finish function. Use proper value!
-    ir_builder->CreateRet(nullptr);
+    if (sym.is_fortran_main_program()
+            || sym.get_type().returns().is_void())
+    {
+        ir_builder->CreateRet(nullptr);
+    }
+    else
+    {
+        // Return the value in the return variable
+        TL::Symbol return_variable = sym.get_result_variable();
+        ERROR_CONDITION(!return_variable.is_valid(), "Result variable is missing?", 0);
+        // Make sure it has been emitted
+        emit_variable(return_variable);
+        llvm::Value* addr_ret_val = get_value(return_variable);
+        llvm::Value* value_ret_val = ir_builder->CreateLoad(addr_ret_val);
+        ir_builder->CreateRet(value_ret_val);
+    }
 
     pop_allocating_block();
     clear_current_function();
@@ -363,16 +377,19 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         TL::Type dest = node.get_type();
         TL::Type orig = node.get_nest().get_type();
 
-        bool needs_load = orig.is_any_reference() && !dest.is_any_reference();
-        if (needs_load)
+        bool does_load = orig.is_any_reference() && !dest.is_any_reference();
+        bool only_load = does_load && dest.no_ref().is_same_type(orig);
+        bool needs_temporary = !orig.is_any_reference() && dest.is_any_reference();
+        // bool does_rebinding = orig.is_any_reference() && dest.is_any_reference();
+        if (does_load)
         {
             value = llvm_visitor->ir_builder->CreateLoad(value);
+            if (only_load)
+                return;
         }
-        orig = orig.no_ref();
 
-        // We're done
-        if (dest.is_same_type(orig))
-            return;
+        dest = dest.no_ref();
+        orig = orig.no_ref();
 
         // Arithmetic conversions
         if (dest.is_signed_integral() && orig.is_signed_integral())
@@ -413,6 +430,11 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             internal_error("Unhandled implicit conversion from '%s' to '%s'\n",
                            print_declarator(orig.get_internal_type()),
                            print_declarator(dest.get_internal_type()));
+        }
+
+        if (needs_temporary)
+        {
+            value = llvm_visitor->make_temporary(value);
         }
     }
 
@@ -802,15 +824,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                             ast_print_node_type(arg.get_kind()));
             arg = arg.as<Nodecl::FortranActualArgument>().get_argument();
 
-            llvm::Value *varg;
-            if (it_param->is_any_reference())
-            {
-                varg = llvm_visitor->eval_expression_to_memory(arg);
-            }
-            else
-            {
-                varg = llvm_visitor->eval_expression(arg);
-            }
+            llvm::Value *varg = llvm_visitor->eval_expression(arg);
             val_arguments.push_back(varg);
 
             it_arg++;
