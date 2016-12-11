@@ -2,7 +2,7 @@
 [llvmfc]
 language = Fortran
 # Avoid splitting output
-options = --width=0
+options = --width=0 --do-not-wrap-modules
 fortran_preprocessor_name = @GFORTRAN@
 fortran_preprocessor_options = -cpp -E
 compiler_name = @LLVM_BINDIR@/clang
