@@ -56,7 +56,6 @@ namespace Codegen
         void visit(const Nodecl::Context &node);
         void visit(const Nodecl::CompoundStatement &node);
         void visit(const Nodecl::ExpressionStatement &node);
-        void visit(const Nodecl::Assignment &node);
         void visit(const Nodecl::IfElseStatement& node);
         void visit(const Nodecl::ForStatement& node);
         void visit(const Nodecl::FortranPrintStatement& node);

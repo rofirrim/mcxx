@@ -223,7 +223,7 @@ void FortranLLVM::visit(const Nodecl::CompoundStatement &node)
 
 void FortranLLVM::visit(const Nodecl::ExpressionStatement &node)
 {
-    walk(node.get_nest());
+    eval_expression(node.get_nest());
 }
 
 void FortranLLVM::visit(const Nodecl::IfElseStatement& node)
@@ -317,14 +317,6 @@ void FortranLLVM::visit(const Nodecl::ForStatement& node)
     set_current_block(block_end);
 }
 
-void FortranLLVM::visit(const Nodecl::Assignment &node)
-{
-    llvm::Value *vlhs = eval_expression(node.get_lhs());
-    llvm::Value *vrhs = eval_expression(node.get_rhs());
-
-    ir_builder->CreateStore(vrhs, vlhs);
-}
-
 class FortranVisitorLLVMExpressionBase : public Nodecl::NodeclVisitor<void>
 {
   protected:
@@ -370,6 +362,14 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         ERROR_CONDITION(!is_load, "Not yet implemented", 0);
 
         value = llvm_visitor->ir_builder->CreateLoad(vnest);
+    }
+
+    void visit(const Nodecl::Assignment& node)
+    {
+        llvm::Value *vlhs = llvm_visitor->eval_expression(node.get_lhs());
+        llvm::Value *vrhs = llvm_visitor->eval_expression(node.get_rhs());
+
+        value = llvm_visitor->ir_builder->CreateStore(vrhs, vlhs);
     }
 
     // void visit(const Nodecl::ObjectInit& node);
@@ -510,7 +510,76 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         llvm::Value* subscripted_val = llvm_visitor->eval_expression(subscripted);
         value = llvm_visitor->ir_builder->CreateGEP(subscripted_val, index_list);
     }
-    // void visit(const Nodecl::FunctionCall& node);
+
+    void visit(const Nodecl::FunctionCall& node)
+    {
+        Nodecl::NodeclBase called = node.get_called();
+        Nodecl::List arguments = node.get_arguments().as<Nodecl::List>();
+
+        ERROR_CONDITION(
+            !called.is<Nodecl::Symbol>(), "We can only call functions", 0);
+        TL::Symbol called_sym = called.get_symbol();
+
+        if (called_sym.is_builtin())
+            internal_error("Builtin calls not yet implemented", 0);
+
+        TL::Type called_type = called_sym.get_type();
+        ERROR_CONDITION(
+            !called_type.is_function(), "Expecting a function type here", 0);
+
+        if (called_type.lacks_prototype())
+            internal_error(
+                "Calls to unprototyped functions not yet implemented", 0);
+
+        std::string mangled_name
+            = fortran_mangle_symbol(called_sym.get_internal_symbol());
+        llvm::FunctionType *function_type = llvm::cast<llvm::FunctionType>(
+            llvm_visitor->get_llvm_type(called_sym.get_type()));
+
+        llvm::Constant *c = llvm_visitor->current_module->getOrInsertFunction(
+            mangled_name,
+            function_type,
+            /* no attributes so far */ llvm::AttributeSet());
+        llvm::Function *fun = llvm::cast<llvm::Function>(c);
+
+        TL::ObjectList<TL::Type> parameters = called_type.parameters();
+
+        std::vector<llvm::Value *> val_arguments;
+        val_arguments.reserve(parameters.size());
+
+        Nodecl::List::iterator it_arg = arguments.begin();
+        TL::ObjectList<TL::Type>::iterator it_param = parameters.begin();
+
+        while (it_arg != arguments.end() && it_param != parameters.end())
+        {
+            Nodecl::NodeclBase arg = *it_arg;
+            ERROR_CONDITION(!arg.is<Nodecl::FortranActualArgument>(),
+                            "Unexpected node '%s'",
+                            ast_print_node_type(arg.get_kind()));
+            arg = arg.as<Nodecl::FortranActualArgument>().get_argument();
+
+            llvm::Value *varg;
+            if (it_param->is_any_reference())
+            {
+                varg = llvm_visitor->eval_expression_to_memory(arg);
+            }
+            else
+            {
+                varg = llvm_visitor->eval_expression(arg);
+            }
+            val_arguments.push_back(varg);
+
+            it_arg++;
+            it_param++;
+        }
+        ERROR_CONDITION(it_arg != arguments.end()
+                            || it_param != parameters.end(),
+                        "Mismatch between arguments and parameters",
+                        0);
+
+        value = llvm_visitor->ir_builder->CreateCall(fun, val_arguments);
+    }
+
     // void visit(const Nodecl::FortranActualArgument& node);
     // void visit(const Nodecl::FortranIoSpec& node);
     // void visit(const Nodecl::FortranImpliedDo& node);
@@ -525,7 +594,6 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     // void visit(const Nodecl::FortranUseOnly& node);
     // void visit(const Nodecl::FieldDesignator& node);
     // void visit(const Nodecl::IndexDesignator& node);
-    // void visit(const Nodecl::Conversion& node);
     // void visit(const Nodecl::UnknownPragma& node);
     // void visit(const Nodecl::PragmaCustomDeclaration& node);
     // void visit(const Nodecl::PragmaCustomClause& node);
