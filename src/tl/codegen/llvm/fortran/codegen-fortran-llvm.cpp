@@ -289,7 +289,7 @@ void FortranLLVM::visit(const Nodecl::ForStatement& node)
     llvm::Value* vupper = eval_expression(upper);
     llvm::Value* vstep;
     if (step.is_null())
-        vstep = getIntegerValue(1, ind_var.get_symbol().get_type());
+        vstep = get_integer_value(1, ind_var.get_symbol().get_type());
     else
         vstep = eval_expression(step);
 
@@ -486,7 +486,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     // void visit(const Nodecl::BooleanLiteral& node);
     void visit(const Nodecl::IntegerLiteral &node)
     {
-        value = llvm_visitor->getIntegerValue(
+        value = llvm_visitor->get_integer_value(
             // FIXME: INTEGER(16)
             const_value_cast_to_8(node.get_constant()),
             node.get_type());
@@ -536,7 +536,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         Nodecl::List subscripts = node.get_subscripts().as<Nodecl::List>();
         std::vector<llvm::Value*> index_list;
         index_list.reserve(subscripts.size() + 1);
-        index_list.push_back(llvm_visitor->getIntegerValue32(0));
+        index_list.push_back(llvm_visitor->get_integer_value_32(0));
 
         TL::Type current_array_type = subscripted_type_noref;
         for (Nodecl::NodeclBase index : subscripts)
@@ -720,7 +720,7 @@ llvm::Value *FortranLLVM::eval_expression_to_memory(Nodecl::NodeclBase n)
 // FIXME - Maybe this should return i64?
 llvm::Value *FortranLLVM::eval_sizeof(Nodecl::NodeclBase n)
 {
-    return getIntegerValue32(n.get_type().no_ref().get_size());
+    return get_integer_value_32(n.get_type().no_ref().get_size());
 }
 
 llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
@@ -818,15 +818,15 @@ void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
             ir_builder->CreateGlobalStringPtr(node.get_filename()),
         gep_for_field(
             gfortran_rt.st_parameter_dt, dt_parm, { "common", "filename" }));
-    ir_builder->CreateStore(getIntegerValue32(node.get_line()),
+    ir_builder->CreateStore(get_integer_value_32(node.get_line()),
                             gep_for_field(gfortran_rt.st_parameter_dt,
                                           dt_parm,
                                           { "common", "line" }));
-    ir_builder->CreateStore(getIntegerValue32(128),
+    ir_builder->CreateStore(get_integer_value_32(128),
                             gep_for_field(gfortran_rt.st_parameter_dt,
                                           dt_parm,
                                           { "common", "flags" }));
-    ir_builder->CreateStore(getIntegerValue32(6),
+    ir_builder->CreateStore(get_integer_value_32(6),
                             gep_for_field(gfortran_rt.st_parameter_dt,
                                           dt_parm,
                                           { "common", "unit" }));
@@ -884,12 +884,12 @@ llvm::Value *FortranLLVM::gep_for_field(
     llvm::Type *t = struct_type;
     std::vector<llvm::Value*> index_list;
     index_list.reserve(access_fields.size() + 1);
-    index_list.push_back(getIntegerValue32(0));
+    index_list.push_back(get_integer_value_32(0));
     for (const auto &f : access_fields)
     {
         int idx = fields[t][f];
 
-        index_list.push_back(getIntegerValue32(idx));
+        index_list.push_back(get_integer_value_32(idx));
 
         t = llvm::cast<llvm::StructType>(t)->elements()[idx];
     }
@@ -1092,9 +1092,9 @@ void FortranLLVM::emit_main(llvm::Function *fortran_program)
     llvm::ArrayType *options_type
         = llvm::ArrayType::get(llvm_types.i32, 9);
     std::vector<llvm::Constant *> options_values{
-        getIntegerValue32(68), getIntegerValue32(1023), getIntegerValue32(0),
-        getIntegerValue32(0),  getIntegerValue32(1),    getIntegerValue32(1),
-        getIntegerValue32(0),  getIntegerValue32(0),    getIntegerValue32(31)
+        get_integer_value_32(68), get_integer_value_32(1023), get_integer_value_32(0),
+        get_integer_value_32(0),  get_integer_value_32(1),    get_integer_value_32(1),
+        get_integer_value_32(0),  get_integer_value_32(0),    get_integer_value_32(31)
     };
 
     llvm::GlobalVariable *options = new llvm::GlobalVariable(
@@ -1129,36 +1129,36 @@ void FortranLLVM::emit_main(llvm::Function *fortran_program)
 
     ir_builder->CreateCall(
         gfortran_rt.set_options,
-        { getIntegerValue32(9),
+        { get_integer_value_32(9),
           ir_builder->CreatePointerCast(options, llvm_types.ptr_i32) });
 
     ir_builder->CreateCall(fortran_program, {});
 
-    ir_builder->CreateRet(getIntegerValue32(0));
+    ir_builder->CreateRet(get_integer_value_32(0));
 
     pop_allocating_block();
     clear_current_function();
 }
 
-llvm::Constant *FortranLLVM::getIntegerValueN(int64_t v, llvm::Type* t, int bits)
+llvm::Constant *FortranLLVM::get_integer_value_N(int64_t v, llvm::Type* t, int bits)
 {
     return llvm::Constant::getIntegerValue(t, llvm::APInt(bits, v, /* signed */ 1));
 }
 
-llvm::Constant *FortranLLVM::getIntegerValue(int64_t v, TL::Type t)
+llvm::Constant *FortranLLVM::get_integer_value(int64_t v, TL::Type t)
 {
     ERROR_CONDITION(!t.is_signed_integral(), "Must be a signed integral", 0);
-    return getIntegerValueN(v, get_llvm_type(t), t.get_size() * 8);
+    return get_integer_value_N(v, get_llvm_type(t), t.get_size() * 8);
 }
 
-llvm::Constant *FortranLLVM::getIntegerValue32(int64_t v)
+llvm::Constant *FortranLLVM::get_integer_value_32(int64_t v)
 {
-    return getIntegerValueN(v, llvm_types.i32, 32);
+    return get_integer_value_N(v, llvm_types.i32, 32);
 }
 
-llvm::Constant *FortranLLVM::getIntegerValue64(int64_t v)
+llvm::Constant *FortranLLVM::get_integer_value_64(int64_t v)
 {
-    return getIntegerValueN(int64_t(v), llvm_types.i64, 64);
+    return get_integer_value_N(int64_t(v), llvm_types.i64, 64);
 }
 
 }

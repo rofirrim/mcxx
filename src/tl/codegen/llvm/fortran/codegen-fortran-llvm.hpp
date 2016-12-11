@@ -221,12 +221,12 @@ namespace Codegen
         // Compute the number of bytes used by an expression ignoring references
         llvm::Value *eval_sizeof(Nodecl::NodeclBase n);
 
-        llvm::Constant* getIntegerValueN(int64_t v, llvm::Type* t, int bits);
+        llvm::Constant* get_integer_value_N(int64_t v, llvm::Type* t, int bits);
 
-        llvm::Constant* getIntegerValue(int64_t v, TL::Type t);
+        llvm::Constant* get_integer_value(int64_t v, TL::Type t);
 
-        llvm::Constant* getIntegerValue32(int64_t v);
-        llvm::Constant* getIntegerValue64(int64_t v);
+        llvm::Constant* get_integer_value_32(int64_t v);
+        llvm::Constant* get_integer_value_64(int64_t v);
 
         void emit_main(llvm::Function *fortran_program);
 
