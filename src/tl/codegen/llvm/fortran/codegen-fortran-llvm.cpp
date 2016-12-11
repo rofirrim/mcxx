@@ -356,12 +356,62 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     {
         // A conversion coalesces more than one conversion including a "load"
         // For now just check that this is a pure load
-        llvm::Value *vnest = llvm_visitor->eval_expression(node.get_nest());
-        bool is_load = 
-            node.get_type().is_same_type(node.get_nest().get_type().no_ref());
-        ERROR_CONDITION(!is_load, "Not yet implemented", 0);
+        value = llvm_visitor->eval_expression(node.get_nest());
 
-        value = llvm_visitor->ir_builder->CreateLoad(vnest);
+        TL::Type dest = node.get_type();
+        TL::Type orig = node.get_nest().get_type();
+
+        bool needs_load = orig.is_any_reference() && !dest.is_any_reference();
+        if (needs_load)
+        {
+            value = llvm_visitor->ir_builder->CreateLoad(value);
+        }
+        orig = orig.no_ref();
+
+        // We're done
+        if (dest.is_same_type(orig))
+            return;
+
+        // Arithmetic conversions
+        if (dest.is_signed_integral() && orig.is_signed_integral())
+        {
+            value = llvm_visitor->ir_builder->CreateSExtOrTrunc(
+                value, llvm_visitor->get_llvm_type(dest));
+        }
+        else if (dest.is_floating_type() && orig.is_floating_type())
+        {
+            // float < double < float128
+            if (dest.get_size() > orig.get_size())
+            {
+                value = llvm_visitor->ir_builder->CreateFPExt(
+                    value, llvm_visitor->get_llvm_type(dest));
+            }
+            else if (dest.get_size() < orig.get_size())
+            {
+                value = llvm_visitor->ir_builder->CreateFPTrunc(
+                    value, llvm_visitor->get_llvm_type(dest));
+            }
+            else
+            {
+                internal_error("Code unreachable", 0);
+            }
+        }
+        else if (dest.is_floating_type() && orig.is_signed_integral())
+        {
+            value = llvm_visitor->ir_builder->CreateSIToFP(
+                value, llvm_visitor->get_llvm_type(dest));
+        }
+        else if (dest.is_signed_integral() && orig.is_floating_type())
+        {
+            value = llvm_visitor->ir_builder->CreateFPToSI(
+                value, llvm_visitor->get_llvm_type(dest));
+        }
+        else
+        {
+            internal_error("Unhandled implicit conversion from '%s' to '%s'\n",
+                           print_declarator(orig.get_internal_type()),
+                           print_declarator(dest.get_internal_type()));
+        }
     }
 
     void visit(const Nodecl::Assignment& node)
