@@ -422,56 +422,154 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         value = llvm_visitor->ir_builder->CreateStore(vrhs, vlhs);
     }
 
+
+    // void visit(const Nodecl::StructuredValue& node);
+    // void visit(const Nodecl::BooleanLiteral& node);
+
+    // void visit(const Nodecl::ComplexLiteral& node);
+
     // void visit(const Nodecl::ObjectInit& node);
-    // void visit(const Nodecl::Plus& node);
-    // void visit(const Nodecl::Neg& node);
+
+    void visit(const Nodecl::Neg &node)
+    {
+        Nodecl::NodeclBase rhs = node.get_rhs();
+        llvm::Value *vrhs = llvm_visitor->eval_expression(rhs);
+
+        // There is no neg instruction. So "neg x" is represented as "sub 0, x"
+        if (rhs.get_type().is_signed_integral())
+        {
+            llvm::Value *z = llvm_visitor->get_integer_value(0, rhs.get_type());
+            value = llvm_visitor->ir_builder->CreateSub(z, vrhs);
+        }
+        else if (rhs.get_type().is_floating_type())
+        {
+            llvm::Value *z = llvm::ConstantFP::get(llvm_visitor->llvm_context,
+                                                   llvm::APFloat(0.0));
+            value = llvm_visitor->ir_builder->CreateFSub(z, vrhs);
+        }
+        else
+        {
+            internal_error(
+                "Code unreachable for unary operator %s. Type is '%s'",
+                ast_print_node_type(node.get_kind()),
+                print_declarator(rhs.get_type().get_internal_type()));
+        }
+    }
+
+    void visit(const Nodecl::Plus &node)
+    {
+        // No-operation
+        walk(node.get_rhs());
+    }
+
     // void visit(const Nodecl::LogicalNot& node);
-    // void visit(const Nodecl::Mul& node);
-    // void visit(const Nodecl::Div& node);
-    // void visit(const Nodecl::Mod& node);
-    void visit(const Nodecl::Add& node)
-    {
-        if (node.get_type().is_signed_integral())
-        {
-            llvm::Value *vlhs = llvm_visitor->eval_expression(node.get_lhs());
-            llvm::Value *vrhs = llvm_visitor->eval_expression(node.get_rhs());
-
-            value = llvm_visitor->ir_builder->CreateAdd(vlhs, vrhs);
-        }
-        else
-        {
-            internal_error(
-                "Not implemented yet '%s'\n",
-                print_declarator(node.get_type().get_internal_type()));
-        }
-    }
-    // void visit(const Nodecl::Minus& node);
-    // void visit(const Nodecl::LowerThan& node);
-    // void visit(const Nodecl::LowerOrEqualThan& node);
-    void visit(const Nodecl::GreaterThan& node)
-    {
-        if (node.get_lhs().get_type().is_signed_integral()
-                && node.get_rhs().get_type().is_signed_integral())
-        {
-            llvm::Value *vlhs = llvm_visitor->eval_expression(node.get_lhs());
-            llvm::Value *vrhs = llvm_visitor->eval_expression(node.get_rhs());
-
-            value = llvm_visitor->ir_builder->CreateICmpSGT(
-                    vlhs,
-                    vrhs);
-        }
-        else
-        {
-            internal_error(
-                "Not implemented yet '%s' <?> '%s\n",
-                print_declarator(node.get_lhs().get_type().get_internal_type()),
-                print_declarator(node.get_rhs().get_type().get_internal_type()));
-        }
-    }
-    // void visit(const Nodecl::GreaterOrEqualThan& node);
     // void visit(const Nodecl::LogicalAnd& node);
     // void visit(const Nodecl::LogicalOr& node);
+
+    template <typename Node, typename CreateSInt, typename CreateFloat>
+    void arithmetic_binary_operator(const Node node,
+                               CreateSInt create_sint,
+                               CreateFloat create_float)
+    {
+        Nodecl::NodeclBase lhs = node.get_lhs();
+        Nodecl::NodeclBase rhs = node.get_rhs();
+        llvm::Value *vlhs = llvm_visitor->eval_expression(lhs);
+        llvm::Value *vrhs = llvm_visitor->eval_expression(rhs);
+
+        if (lhs.get_type().is_signed_integral()
+            && rhs.get_type().is_signed_integral())
+        {
+            value = create_sint(vlhs, vrhs);
+        }
+        else if (lhs.get_type().is_floating_type()
+                 && rhs.get_type().is_floating_type())
+        {
+            value = create_float(vlhs, vrhs);
+        }
+        else
+        {
+            internal_error(
+                "Code unreachable for comparison %s. Types are '%s' and '%s'",
+                ast_print_node_type(node.get_kind()),
+                print_declarator(lhs.get_type().get_internal_type()),
+                print_declarator(rhs.get_type().get_internal_type()));
+        }
+    }
+#define CREATOR(Creator) [&, this](llvm::Value* lhs, llvm::Value* rhs) { return llvm_visitor->ir_builder->Creator(lhs, rhs); }
+
+    void visit(const Nodecl::Add& node)
+    {
+        arithmetic_binary_operator(node,
+                              CREATOR(CreateAdd),
+                              CREATOR(CreateFAdd));
+    }
+
+    void visit(const Nodecl::Minus& node)
+    {
+        arithmetic_binary_operator(node,
+                              CREATOR(CreateSub),
+                              CREATOR(CreateFSub));
+    }
+
+    void visit(const Nodecl::Mul& node)
+    {
+        arithmetic_binary_operator(node,
+                              CREATOR(CreateMul),
+                              CREATOR(CreateFMul));
+    }
+
+    void visit(const Nodecl::Div& node)
+    {
+        arithmetic_binary_operator(node,
+                              CREATOR(CreateSDiv),
+                              CREATOR(CreateFDiv));
+    }
+
     // void visit(const Nodecl::Power& node);
+
+    void visit(const Nodecl::LowerThan &node)
+    {
+        arithmetic_binary_operator(node,
+                              CREATOR(CreateICmpSLT),
+                              CREATOR(CreateFCmpOLT));
+    }
+
+    void visit(const Nodecl::LowerOrEqualThan &node)
+    {
+        arithmetic_binary_operator(node,
+                              CREATOR(CreateICmpSLE),
+                              CREATOR(CreateFCmpOLE));
+    }
+
+    void visit(const Nodecl::GreaterThan &node)
+    {
+        arithmetic_binary_operator(node,
+                              CREATOR(CreateICmpSGT),
+                              CREATOR(CreateFCmpOGT));
+    }
+
+    void visit(const Nodecl::GreaterOrEqualThan &node)
+    {
+        arithmetic_binary_operator(node,
+                              CREATOR(CreateICmpSGE),
+                              CREATOR(CreateFCmpOGE));
+    }
+
+    void visit(const Nodecl::Equal &node)
+    {
+        arithmetic_binary_operator(node,
+                              CREATOR(CreateICmpEQ),
+                              CREATOR(CreateFCmpOEQ));
+    }
+
+    void visit(const Nodecl::Different &node)
+    {
+        arithmetic_binary_operator(node,
+                              CREATOR(CreateICmpNE),
+                              CREATOR(CreateFCmpONE));
+    }
+#undef CREATOR
+
     // void visit(const Nodecl::Concat& node);
     // void visit(const Nodecl::ClassMemberAccess& node);
     // void visit(const Nodecl::Range& node);
@@ -481,9 +579,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         str = str.substr(1, str.size() - 2);
         value = llvm_visitor->ir_builder->CreateGlobalStringPtr(str);
     }
-    // void visit(const Nodecl::Text& node);
-    // void visit(const Nodecl::StructuredValue& node);
-    // void visit(const Nodecl::BooleanLiteral& node);
+
     void visit(const Nodecl::IntegerLiteral &node)
     {
         value = llvm_visitor->get_integer_value(
@@ -492,7 +588,6 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             node.get_type());
     }
 
-    // void visit(const Nodecl::ComplexLiteral& node);
     void visit(const Nodecl::FloatingLiteral& node)
     {
         TL::Type t = node.get_type();
@@ -514,9 +609,6 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                            print_declarator(t.get_internal_type()));
         }
     }
-    // void visit(const Nodecl::Symbol& node);
-    // void visit(const Nodecl::Equal& node);
-    // void visit(const Nodecl::Different& node);
     // void visit(const Nodecl::Dereference& node);
     // void visit(const Nodecl::Reference& node);
     // void visit(const Nodecl::ParenthesizedExpression& node);
