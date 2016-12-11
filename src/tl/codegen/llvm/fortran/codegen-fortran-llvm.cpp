@@ -232,7 +232,9 @@ void FortranLLVM::visit(const Nodecl::IfElseStatement& node)
     Nodecl::NodeclBase then_node = node.get_then();
     Nodecl::NodeclBase else_node = node.get_else();
 
-    llvm::Value *cond_val = eval_expression(condition);
+    llvm::Value *cond_val = ir_builder->CreateZExtOrTrunc(
+            eval_expression(condition),
+            llvm_types.i1);
 
     llvm::BasicBlock * block_true = llvm::BasicBlock::Create(llvm_context, "if.true", get_current_function());
     llvm::BasicBlock * block_end = llvm::BasicBlock::Create(llvm_context, "if.end", get_current_function());
@@ -424,7 +426,19 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
 
     // void visit(const Nodecl::StructuredValue& node);
-    // void visit(const Nodecl::BooleanLiteral& node);
+    void visit(const Nodecl::BooleanLiteral& node)
+    {
+        const_value_t *val = node.get_constant();
+
+        if (const_value_is_zero(val))
+        {
+            value = llvm_visitor->get_integer_value(0, node.get_type());
+        }
+        else
+        {
+            value = llvm_visitor->get_integer_value(1, node.get_type());
+        }
+    }
 
     // void visit(const Nodecl::ComplexLiteral& node);
 
@@ -462,9 +476,74 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         walk(node.get_rhs());
     }
 
-    // void visit(const Nodecl::LogicalNot& node);
-    // void visit(const Nodecl::LogicalAnd& node);
-    // void visit(const Nodecl::LogicalOr& node);
+    void visit(const Nodecl::LogicalAnd& node)
+    {
+        Nodecl::NodeclBase lhs = node.get_lhs();
+        Nodecl::NodeclBase rhs = node.get_rhs();
+        llvm::Value *vlhs = llvm_visitor->eval_expression(lhs);
+        llvm::BasicBlock *block_eval_lhs = llvm_visitor->get_current_block();
+
+        llvm::Value *vcond = llvm_visitor->ir_builder->CreateZExtOrTrunc(
+            vlhs, llvm_visitor->llvm_types.i1);
+
+        llvm::BasicBlock *block_eval_rhs = llvm::BasicBlock::Create(
+            llvm_visitor->llvm_context, "and.rhs", llvm_visitor->get_current_function());
+        llvm::BasicBlock *block_end = llvm::BasicBlock::Create(
+            llvm_visitor->llvm_context, "and.end", llvm_visitor->get_current_function());
+        llvm_visitor->ir_builder->CreateCondBr(vcond, block_eval_rhs, block_end);
+
+        llvm_visitor->set_current_block(block_eval_rhs);
+        llvm::Value *vrhs = llvm_visitor->eval_expression(rhs);
+        llvm_visitor->ir_builder->CreateBr(block_end);
+
+        llvm_visitor->set_current_block(block_end);
+        value = llvm_visitor->ir_builder->CreatePHI(
+            llvm_visitor->get_llvm_type(node.get_type()), 2);
+        llvm::cast<llvm::PHINode>(value)->addIncoming(vlhs, block_eval_lhs);
+        llvm::cast<llvm::PHINode>(value)->addIncoming(vrhs, block_eval_rhs);
+    }
+
+    void visit(const Nodecl::LogicalOr& node)
+    {
+        Nodecl::NodeclBase lhs = node.get_lhs();
+        Nodecl::NodeclBase rhs = node.get_rhs();
+        llvm::BasicBlock *block_eval_lhs = llvm_visitor->get_current_block();
+        llvm::Value *vlhs = llvm_visitor->eval_expression(lhs);
+
+        llvm::Value *vcond = llvm_visitor->ir_builder->CreateZExtOrTrunc(
+            vlhs, llvm_visitor->llvm_types.i1);
+
+        llvm::BasicBlock *block_eval_rhs = llvm::BasicBlock::Create(
+            llvm_visitor->llvm_context, "or.rhs", llvm_visitor->get_current_function());
+        llvm::BasicBlock *block_end = llvm::BasicBlock::Create(
+            llvm_visitor->llvm_context, "or.end", llvm_visitor->get_current_function());
+        llvm_visitor->ir_builder->CreateCondBr(vcond, block_end, block_eval_rhs);
+
+        llvm_visitor->set_current_block(block_eval_rhs);
+        llvm::Value *vrhs = llvm_visitor->eval_expression(rhs);
+        llvm_visitor->ir_builder->CreateBr(block_end);
+
+        llvm_visitor->set_current_block(block_end);
+        value = llvm_visitor->ir_builder->CreatePHI(
+            llvm_visitor->get_llvm_type(node.get_type()), 2);
+        llvm::cast<llvm::PHINode>(value)->addIncoming(vlhs, block_eval_lhs);
+        llvm::cast<llvm::PHINode>(value)->addIncoming(vrhs, block_eval_rhs);
+    }
+
+    void visit(const Nodecl::LogicalNot& node)
+    {
+        Nodecl::NodeclBase rhs = node.get_rhs();
+        TL::Type rhs_type = rhs.get_type();
+
+        value = llvm_visitor->eval_expression(rhs);
+
+        // select x, 1, 0
+        value = llvm_visitor->ir_builder->CreateSelect(
+            llvm_visitor->ir_builder->CreateZExtOrTrunc(
+                value, llvm_visitor->llvm_types.i1),
+            llvm_visitor->get_integer_value(1, rhs_type),
+            llvm_visitor->get_integer_value(0, rhs_type));
+    }
 
     template <typename Node, typename CreateSInt, typename CreateFloat>
     void arithmetic_binary_operator(const Node node,
@@ -495,8 +574,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 print_declarator(rhs.get_type().get_internal_type()));
         }
     }
-#define CREATOR(Creator) [&, this](llvm::Value* lhs, llvm::Value* rhs) { return llvm_visitor->ir_builder->Creator(lhs, rhs); }
 
+#define CREATOR(Creator) [&, this](llvm::Value* lhs, llvm::Value* rhs) { return llvm_visitor->ir_builder->Creator(lhs, rhs); }
     void visit(const Nodecl::Add& node)
     {
         arithmetic_binary_operator(node,
@@ -527,44 +606,59 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
     // void visit(const Nodecl::Power& node);
 
+    template <typename Node, typename CreateSInt, typename CreateFloat>
+    void arithmetic_binary_comparison(const Node node,
+                                      CreateSInt create_sint,
+                                      CreateFloat create_float)
+    {
+        arithmetic_binary_operator(node, create_sint, create_float);
+
+        // Make sure the logical value stays in the proper integer size
+        // and not just i1.
+        // Note the usage of CreateZExtOrTrunk here instead of the usual SExt
+        // otherwise the resulting value would be 0 or -1 and we want 0 or 1
+        value = llvm_visitor->ir_builder->CreateZExtOrTrunc(
+            value, llvm_visitor->get_llvm_type(node.get_type()));
+    }
+
     void visit(const Nodecl::LowerThan &node)
     {
-        arithmetic_binary_operator(node,
+        arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpSLT),
                               CREATOR(CreateFCmpOLT));
     }
 
     void visit(const Nodecl::LowerOrEqualThan &node)
     {
-        arithmetic_binary_operator(node,
+        arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpSLE),
                               CREATOR(CreateFCmpOLE));
     }
 
     void visit(const Nodecl::GreaterThan &node)
     {
-        arithmetic_binary_operator(node,
+        arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpSGT),
                               CREATOR(CreateFCmpOGT));
     }
 
     void visit(const Nodecl::GreaterOrEqualThan &node)
     {
-        arithmetic_binary_operator(node,
+        arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpSGE),
                               CREATOR(CreateFCmpOGE));
     }
 
     void visit(const Nodecl::Equal &node)
     {
-        arithmetic_binary_operator(node,
+        arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpEQ),
                               CREATOR(CreateFCmpOEQ));
     }
 
     void visit(const Nodecl::Different &node)
     {
-        arithmetic_binary_operator(node,
+        arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpNE),
                               CREATOR(CreateFCmpONE));
     }
@@ -611,7 +705,15 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     }
     // void visit(const Nodecl::Dereference& node);
     // void visit(const Nodecl::Reference& node);
-    // void visit(const Nodecl::ParenthesizedExpression& node);
+    void visit(const Nodecl::ParenthesizedExpression& node)
+    {
+        // FIXME: Technically Fortran says that the operands are to be
+        // evaluated in the program order if they are inside a parenthesis. For
+        // now I do not know how to force such a thing in LLVM, so temporarily
+        // we will assume this is a no-op
+        walk(node.get_nest());
+    }
+
     void visit(const Nodecl::ArraySubscript& node)
     {
         Nodecl::NodeclBase subscripted = node.get_subscripted();
@@ -991,6 +1093,7 @@ llvm::Value *FortranLLVM::gep_for_field(
 
 void FortranLLVM::initialize_llvm_types()
 {
+    llvm_types.i1 = llvm::Type::getInt1Ty(llvm_context);
     llvm_types.i8 = llvm::Type::getInt8Ty(llvm_context);
     llvm_types.i16 = llvm::Type::getInt16Ty(llvm_context);
     llvm_types.i32 = llvm::Type::getInt32Ty(llvm_context);
@@ -1239,7 +1342,9 @@ llvm::Constant *FortranLLVM::get_integer_value_N(int64_t v, llvm::Type* t, int b
 
 llvm::Constant *FortranLLVM::get_integer_value(int64_t v, TL::Type t)
 {
-    ERROR_CONDITION(!t.is_signed_integral(), "Must be a signed integral", 0);
+    ERROR_CONDITION(!t.is_signed_integral() && !t.is_bool(),
+                    "Must be a signed integral or boolean",
+                    0);
     return get_integer_value_N(v, get_llvm_type(t), t.get_size() * 8);
 }
 

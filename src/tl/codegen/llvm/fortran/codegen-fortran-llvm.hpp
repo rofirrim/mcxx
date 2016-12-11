@@ -114,6 +114,7 @@ namespace Codegen
 
         struct LLVMTypes
         {
+            llvm::Type* i1;
             llvm::Type* i8;
             llvm::Type* i16;
             llvm::Type* i32;
