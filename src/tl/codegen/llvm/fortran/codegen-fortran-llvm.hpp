@@ -71,7 +71,6 @@ namespace Codegen
         struct FunctionInfo
         {
             llvm::Function *function;
-            llvm::BasicBlock *current_block;
             std::map<TL::Symbol, llvm::Value *> mapping;
         } function_info;
 
@@ -181,13 +180,11 @@ namespace Codegen
         // Basic block
         void set_current_block(llvm::BasicBlock *bb)
         {
-            ERROR_CONDITION(bb == NULL, "Invalid block", 0);
-            function_info.current_block = bb;
             ir_builder->SetInsertPoint(bb);
         }
         llvm::BasicBlock* get_current_block()
         {
-            return function_info.current_block;
+            return ir_builder->GetInsertBlock();
         }
 
         // Basic block where we emit allocas

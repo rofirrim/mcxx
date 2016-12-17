@@ -1161,6 +1161,8 @@ void FortranLLVM::emit_variable(TL::Symbol sym)
         // Emit size
         llvm::IRBuilderBase::InsertPoint previous_ip = change_to_allocating_block();
 
+        bool block_was_terminated = get_current_block()->getTerminator() != nullptr;
+
         TL::Type t = sym.get_type();
         llvm::Value *val_size = eval_expression(t.array_get_size());
         t = t.array_element();
@@ -1173,8 +1175,11 @@ void FortranLLVM::emit_variable(TL::Symbol sym)
         }
         array_size = val_size;
 
-        if (ir_builder->GetInsertBlock() != allocating_block())
+        if (get_current_block() != allocating_block()
+                && block_was_terminated)
+        {
             internal_error("We have split the allocating block. Not implemented yet", 0);
+        }
 
         return_from_allocating_block(previous_ip);
     }
