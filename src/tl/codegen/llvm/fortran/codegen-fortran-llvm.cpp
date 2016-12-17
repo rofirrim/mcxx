@@ -377,8 +377,11 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         TL::Type dest = node.get_type();
         TL::Type orig = node.get_nest().get_type();
 
+        TL::Type real_dest = dest;
+        TL::Type real_orig = orig;
+
         bool does_load = orig.is_any_reference() && !dest.is_any_reference();
-        bool only_load = does_load && dest.no_ref().is_same_type(orig);
+        bool only_load = does_load && orig.no_ref().is_same_type(dest);
         bool needs_temporary = !orig.is_any_reference() && dest.is_any_reference();
         // bool does_rebinding = orig.is_any_reference() && dest.is_any_reference();
         if (does_load)
@@ -428,8 +431,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         else
         {
             internal_error("Unhandled implicit conversion from '%s' to '%s'\n",
-                           print_declarator(orig.get_internal_type()),
-                           print_declarator(dest.get_internal_type()));
+                           print_declarator(real_orig.get_internal_type()),
+                           print_declarator(real_dest.get_internal_type()));
         }
 
         if (needs_temporary)
