@@ -946,6 +946,34 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             arg = arg.as<Nodecl::FortranActualArgument>().get_argument();
 
             llvm::Value *varg = llvm_visitor->eval_expression(arg);
+
+            if (it_param->no_ref().is_array())
+            {
+                TL::Type array_type = it_param->no_ref();
+                if (array_type.array_is_vla())
+                {
+                    TL::Type element_type = array_type;
+                    while (element_type.is_array())
+                        element_type = element_type.array_element();
+
+                    // Cast to a pointer of the element
+                    varg = llvm_visitor->ir_builder->CreateBitCast(
+                        varg,
+                        llvm::PointerType::get(
+                            llvm_visitor->get_llvm_type(element_type),
+                            /* AddressSpace */ 0));
+                }
+                else if (array_type.array_requires_descriptor())
+                {
+                    internal_error("Not yet implemented", 0);
+                }
+                else
+                {
+                    // Nothing special has to be done
+                }
+            }
+
+
             val_arguments.push_back(varg);
 
             it_arg++;
