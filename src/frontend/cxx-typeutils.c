@@ -11423,11 +11423,17 @@ static void get_type_name_string_internal_impl(const decl_context_t* decl_contex
                         whole_size = UNIQUESTR_LITERAL("[]");
                     }
                     // If this is a saved expression and it IS a parameter we use its saved expression instead
-                    else if (nodecl_get_kind(type_info->array->whole_size) == NODECL_SYMBOL
-                            && symbol_entity_specs_get_is_saved_expression(
-                                nodecl_get_symbol(type_info->array->whole_size)))
+                    else if (nodecl_get_kind(nodecl_advance_conversions(
+                                 type_info->array->whole_size))
+                                 == NODECL_SYMBOL
+                             && symbol_entity_specs_get_is_saved_expression(
+                                    nodecl_get_symbol(
+                                        nodecl_advance_conversions(
+                                            type_info->array->whole_size))))
                     {
-                        scope_entry_t* saved_expr = nodecl_get_symbol(type_info->array->whole_size);
+                        scope_entry_t *saved_expr
+                            = nodecl_get_symbol(nodecl_advance_conversions(
+                                type_info->array->whole_size));
                         const char* whole_size_str = uniquestr(codegen_to_str(saved_expr->value, decl_context));
 
                         whole_size = strappend("[", whole_size_str);
@@ -11449,13 +11455,19 @@ static void get_type_name_string_internal_impl(const decl_context_t* decl_contex
                     }
                     // A saved expression that is not user declared means that we have to ignore it
                     // when printing it
-                    else if (nodecl_get_kind(type_info->array->whole_size) == NODECL_SYMBOL
-                            && symbol_entity_specs_get_is_saved_expression(
-                                nodecl_get_symbol(type_info->array->whole_size))
-                            && !symbol_entity_specs_get_is_user_declared(
-                                nodecl_get_symbol(type_info->array->whole_size)))
+                    else if (nodecl_get_kind(nodecl_advance_conversions(
+                                 type_info->array->whole_size))
+                                 == NODECL_SYMBOL
+                             && symbol_entity_specs_get_is_saved_expression(
+                                    nodecl_get_symbol(
+                                        nodecl_advance_conversions(
+                                            type_info->array->whole_size)))
+                             && !symbol_entity_specs_get_is_user_declared(
+                                    nodecl_get_symbol(
+                                        nodecl_advance_conversions(
+                                            type_info->array->whole_size))))
                     {
-                        scope_entry_t* saved_expr = nodecl_get_symbol(type_info->array->whole_size);
+                        scope_entry_t* saved_expr = nodecl_get_symbol(nodecl_advance_conversions(type_info->array->whole_size));
                         const char* whole_size_str = uniquestr(codegen_to_str(saved_expr->value, decl_context));
 
                         whole_size = strappend("[", whole_size_str);
@@ -12148,13 +12160,13 @@ static const char* print_dimension_of_array(nodecl_t n, const decl_context_t* de
 {
     if (nodecl_is_null(n))
         return "?";
-    if (nodecl_get_kind(n) == NODECL_SYMBOL
-            && symbol_entity_specs_get_is_saved_expression(nodecl_get_symbol(n)))
+    if (nodecl_get_kind(nodecl_advance_conversions(n)) == NODECL_SYMBOL
+            && symbol_entity_specs_get_is_saved_expression(nodecl_get_symbol(nodecl_advance_conversions(n))))
     {
         const char* result = NULL;
         uniquestr_sprintf(&result, "%s { alias of %s }",
-                nodecl_get_symbol(n)->symbol_name,
-                codegen_to_str(nodecl_get_symbol(n)->value, decl_context));
+                nodecl_get_symbol(nodecl_advance_conversions(n))->symbol_name,
+                codegen_to_str(nodecl_get_symbol(nodecl_advance_conversions(n))->value, decl_context));
 
         return result;
     }

@@ -31694,3 +31694,12 @@ static void check_multiexpression(AST expr, const decl_context_t* decl_context, 
             nodecl_get_type(nodecl_subexpr),
             ast_get_locus(expr));
 }
+
+nodecl_t nodecl_advance_conversions(nodecl_t n)
+{
+    while (nodecl_get_kind(n) == NODECL_CONVERSION)
+    {
+        n = nodecl_get_child(n, 0);
+    }
+    return n;
+}

@@ -3882,7 +3882,10 @@ static type_t* eval_array_spec(type_t* basic_type,
 
                 lower_bound = nodecl_make_symbol(new_vla_dim,
                         new_vla_dim->locus);
-                nodecl_set_type(lower_bound, new_vla_dim->type_information);
+                nodecl_set_type(lower_bound, get_lvalue_reference_type(new_vla_dim->type_information));
+                lower_bound = nodecl_make_conversion(
+                    lower_bound, new_vla_dim->type_information,
+                    nodecl_get_locus(lower_bound));
 
                 *nodecl_output = nodecl_append_to_list(*nodecl_output,
                         nodecl_make_object_init(new_vla_dim, 
@@ -3923,7 +3926,10 @@ static type_t* eval_array_spec(type_t* basic_type,
 
                 upper_bound = nodecl_make_symbol(new_vla_dim,
                         new_vla_dim->locus);
-                nodecl_set_type(upper_bound, new_vla_dim->type_information);
+                nodecl_set_type(upper_bound, get_lvalue_reference_type(new_vla_dim->type_information));
+                upper_bound = nodecl_make_conversion(
+                    upper_bound, new_vla_dim->type_information,
+                    nodecl_get_locus(upper_bound));
 
                 *nodecl_output = nodecl_append_to_list(*nodecl_output,
                         nodecl_make_object_init(new_vla_dim, 

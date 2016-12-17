@@ -5033,20 +5033,20 @@ OPERATOR_TABLE
                     if (!lower.is_null())
                     {
                         declare_module_level_entities(lower);
-                        if (lower.is<Nodecl::Symbol>()
-                                && lower.get_symbol().is_saved_expression())
+                        if (lower.no_conv().is<Nodecl::Symbol>()
+                                && lower.no_conv().get_symbol().is_saved_expression())
                         {
-                            declare_module_level_entities(lower.get_symbol().get_value());
+                            declare_module_level_entities(lower.no_conv().get_symbol().get_value());
                         }
                     }
 
                     if (!upper.is_null())
                     {
                         declare_module_level_entities(upper);
-                        if (upper.is<Nodecl::Symbol>()
-                                && upper.get_symbol().is_saved_expression())
+                        if (upper.no_conv().is<Nodecl::Symbol>()
+                                && upper.no_conv().get_symbol().is_saved_expression())
                         {
-                            declare_module_level_entities(upper.get_symbol().get_value());
+                            declare_module_level_entities(upper.no_conv().get_symbol().get_value());
                         }
                     }
 
@@ -5156,17 +5156,17 @@ OPERATOR_TABLE
             t.array_get_bounds(lower_bound, upper_bound);
 
             if (!lower_bound.is_null()
-                    && lower_bound.get_symbol().is_valid()
-                    && lower_bound.get_symbol().is_saved_expression())
+                    && lower_bound.no_conv().get_symbol().is_valid()
+                    && lower_bound.no_conv().get_symbol().is_saved_expression())
             {
-                lower_bound = lower_bound.get_symbol().get_value();
+                lower_bound = lower_bound.no_conv().get_symbol().get_value();
             }
 
             if (!upper_bound.is_null()
-                    && upper_bound.get_symbol().is_valid()
-                    && upper_bound.get_symbol().is_saved_expression())
+                    && upper_bound.no_conv().get_symbol().is_valid()
+                    && upper_bound.no_conv().get_symbol().is_saved_expression())
             {
-                upper_bound = upper_bound.get_symbol().get_value();
+                upper_bound = upper_bound.no_conv().get_symbol().get_value();
             }
 
             declare_everything_needed(lower_bound, sc);
@@ -5383,20 +5383,20 @@ OPERATOR_TABLE
                     if (!lower.is_null())
                     {
                         declare_symbols_from_modules_rec(lower, sc, use_stmt_info);
-                        if (lower.is<Nodecl::Symbol>()
-                                && lower.get_symbol().is_saved_expression())
+                        if (lower.no_conv().is<Nodecl::Symbol>()
+                                && lower.no_conv().get_symbol().is_saved_expression())
                         {
-                            declare_symbols_from_modules_rec(lower.get_symbol().get_value(), sc, use_stmt_info);
+                            declare_symbols_from_modules_rec(lower.no_conv().get_symbol().get_value(), sc, use_stmt_info);
                         }
                     }
 
                     if (!upper.is_null())
                     {
                         declare_symbols_from_modules_rec(upper, sc, use_stmt_info);
-                        if (upper.is<Nodecl::Symbol>()
-                                && upper.get_symbol().is_saved_expression())
+                        if (upper.no_conv().is<Nodecl::Symbol>()
+                                && upper.no_conv().get_symbol().is_saved_expression())
                         {
-                            declare_symbols_from_modules_rec(upper.get_symbol().get_value(), sc, use_stmt_info);
+                            declare_symbols_from_modules_rec(upper.no_conv().get_symbol().get_value(), sc, use_stmt_info);
                         }
                     }
 
@@ -6061,16 +6061,16 @@ OPERATOR_TABLE
 
                 // Get the real expression of this saved expression
                 if (!array_spec_list[array_spec_idx].lower.is_null()
-                        && array_spec_list[array_spec_idx].lower.is<Nodecl::Symbol>()
-                        && array_spec_list[array_spec_idx].lower.get_symbol().is_saved_expression())
+                        && array_spec_list[array_spec_idx].lower.no_conv().is<Nodecl::Symbol>()
+                        && array_spec_list[array_spec_idx].lower.no_conv().get_symbol().is_saved_expression())
                 {
-                    array_spec_list[array_spec_idx].lower = array_spec_list[array_spec_idx].lower.get_symbol().get_value();
+                    array_spec_list[array_spec_idx].lower = array_spec_list[array_spec_idx].lower.no_conv().get_symbol().get_value();
                 }
                 if (!array_spec_list[array_spec_idx].upper.is_null()
-                        && array_spec_list[array_spec_idx].upper.is<Nodecl::Symbol>()
-                        && array_spec_list[array_spec_idx].upper.get_symbol().is_saved_expression())
+                        && array_spec_list[array_spec_idx].upper.no_conv().is<Nodecl::Symbol>()
+                        && array_spec_list[array_spec_idx].upper.no_conv().get_symbol().is_saved_expression())
                 {
-                    array_spec_list[array_spec_idx].upper = array_spec_list[array_spec_idx].upper.get_symbol().get_value();
+                    array_spec_list[array_spec_idx].upper = array_spec_list[array_spec_idx].upper.no_conv().get_symbol().get_value();
                 }
 
                 if (!array_spec_list[array_spec_idx].is_undefined)
