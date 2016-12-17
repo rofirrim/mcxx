@@ -240,6 +240,27 @@ void FortranLLVM::visit(const Nodecl::ExpressionStatement &node)
     eval_expression(node.get_nest());
 }
 
+void FortranLLVM::visit(const Nodecl::ObjectInit& node)
+{
+    
+    TL::Symbol sym = node.get_symbol();
+
+    if (sym.is_variable()
+            && sym.is_saved_expression())
+    {
+        // Model this like an assignment to the saved expression
+        emit_variable(sym);
+        llvm::Value *vlhs = get_value(sym);
+        llvm::Value *vrhs = eval_expression(sym.get_value());
+
+        ir_builder->CreateStore(vrhs, vlhs);
+    }
+    else
+    {
+        std::cerr << "Unhandled object init. Symbol = " << node.get_symbol().get_name() << " " << symbol_kind_name(node.get_symbol().get_internal_symbol()) << std::endl;
+    }
+}
+
 void FortranLLVM::visit(const Nodecl::IfElseStatement& node)
 {
     Nodecl::NodeclBase condition = node.get_condition();
@@ -347,6 +368,7 @@ class FortranVisitorLLVMExpressionBase : public Nodecl::NodeclVisitor<void>
 
     llvm::Value *get_value()
     {
+        ERROR_CONDITION(value == NULL, "Invalid value gathered", 0);
         return value;
     }
 
@@ -467,7 +489,10 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
     // void visit(const Nodecl::ComplexLiteral& node);
 
-    // void visit(const Nodecl::ObjectInit& node);
+    void visit(const Nodecl::ObjectInit& node)
+    {
+        std::cerr << "Unhandled object init. Symbol = " << node.get_symbol().get_name() << " " << symbol_kind_name(node.get_symbol().get_internal_symbol()) << std::endl;
+    }
 
     void visit(const Nodecl::Neg &node)
     {
@@ -577,23 +602,45 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     {
         Nodecl::NodeclBase lhs = node.get_lhs();
         Nodecl::NodeclBase rhs = node.get_rhs();
-        llvm::Value *vlhs = llvm_visitor->eval_expression(lhs);
-        llvm::Value *vrhs = llvm_visitor->eval_expression(rhs);
 
-        if (lhs.get_type().is_signed_integral()
-            && rhs.get_type().is_signed_integral())
+        if (lhs.get_type().is_array() || rhs.get_type().is_array())
         {
+            if (lhs.get_type().is_array() == rhs.get_type().is_array())
+            {
+                // One is array, and the other is not
+                internal_error("Array ops not yet implemented", 0);
+                // Both are array. Fortran says that it does not matter the
+                // size of each array at this point, just use one of them.
+                // FIXME: some extents may be easier to compute than others,
+                // prefer the easier ones
+            }
+            else
+            {
+                // One is array, and the other is not
+                internal_error("Array + scalar ops not yet implemented", 0);
+            }
+        }
+        else if (lhs.get_type().is_signed_integral()
+                 && rhs.get_type().is_signed_integral())
+        {
+            llvm::Value *vlhs = llvm_visitor->eval_expression(lhs);
+            llvm::Value *vrhs = llvm_visitor->eval_expression(rhs);
+
             value = create_sint(vlhs, vrhs);
         }
         else if (lhs.get_type().is_floating_type()
                  && rhs.get_type().is_floating_type())
         {
+            llvm::Value *vlhs = llvm_visitor->eval_expression(lhs);
+            llvm::Value *vrhs = llvm_visitor->eval_expression(rhs);
+
             value = create_float(vlhs, vrhs);
         }
         else
         {
             internal_error(
-                "Code unreachable for comparison %s. Types are '%s' and '%s'",
+                "Code unreachable for binary operator %s. Types are '%s' and "
+                "'%s'",
                 ast_print_node_type(node.get_kind()),
                 print_declarator(lhs.get_type().get_internal_type()),
                 print_declarator(rhs.get_type().get_internal_type()));
@@ -640,7 +687,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
         // Make sure the logical value stays in the proper integer size
         // and not just i1.
-        // Note the usage of CreateZExtOrTrunk here instead of the usual SExt
+        // Note the usage of CreateZExtOrTrunc here instead of the usual SExt
         // otherwise the resulting value would be 0 or -1 and we want 0 or 1
         value = llvm_visitor->ir_builder->CreateZExtOrTrunc(
             value, llvm_visitor->get_llvm_type(node.get_type()));
@@ -745,39 +792,110 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         TL::Type subscripted_type = subscripted.get_type();
         TL::Type subscripted_type_noref = subscripted_type.no_ref();
 
-        ERROR_CONDITION(!subscripted_type_noref.is_array(),
-                "Expecting an array here", 0);
+        ERROR_CONDITION(
+            !subscripted_type_noref.is_array(), "Expecting an array here", 0);
 
-        if (subscripted_type_noref.array_requires_descriptor()
-                || subscripted_type_noref.array_is_vla())
-            internal_error("Not implemented yet", 0);
-
-        Nodecl::List subscripts = node.get_subscripts().as<Nodecl::List>();
-        std::vector<llvm::Value*> index_list;
-        index_list.reserve(subscripts.size() + 1);
-        index_list.push_back(llvm_visitor->get_integer_value_32(0));
-
-        TL::Type current_array_type = subscripted_type_noref;
-        for (Nodecl::NodeclBase index : subscripts)
+        if (subscripted_type_noref.array_requires_descriptor())
         {
-            llvm::Value *idx = llvm_visitor->ir_builder->CreateSExtOrTrunc(
-                llvm_visitor->eval_expression(index),
-                llvm_visitor->llvm_types.i64);
-
-            Nodecl::NodeclBase lower, upper;
-            current_array_type.array_get_bounds(lower, upper);
-            llvm::Value *base = llvm_visitor->ir_builder->CreateSExtOrTrunc(
-                llvm_visitor->eval_expression(lower),
-                llvm_visitor->llvm_types.i64);
-
-            idx = llvm_visitor->ir_builder->CreateSub(idx, base);
-            index_list.push_back(idx);
-
-            current_array_type = current_array_type.array_element();
+            internal_error("Not yet implemented", 0);
         }
+        else
+        {
+            bool is_vla = subscripted_type_noref.array_is_vla();
 
-        llvm::Value* subscripted_val = llvm_visitor->eval_expression(subscripted);
-        value = llvm_visitor->ir_builder->CreateGEP(subscripted_val, index_list);
+            Nodecl::List subscripts = node.get_subscripts().as<Nodecl::List>();
+            std::vector<llvm::Value *> offset_list, size_list;
+            if (is_vla)
+            {
+                offset_list.reserve(subscripts.size());
+                size_list.reserve(subscripts.size());
+            }
+            else
+            {
+                offset_list.reserve(subscripts.size() + 1);
+                offset_list.push_back(llvm_visitor->get_integer_value_32(0));
+            }
+
+            TL::Type current_array_type = subscripted_type_noref;
+            for (Nodecl::NodeclBase index : subscripts)
+            {
+                Nodecl::NodeclBase lower, upper;
+                current_array_type.array_get_bounds(lower, upper);
+                llvm::Value *val_lower
+                    = llvm_visitor->ir_builder->CreateSExtOrTrunc(
+                        llvm_visitor->eval_expression(lower),
+                        llvm_visitor->llvm_types.i64);
+                llvm::Value *val_upper
+                    = llvm_visitor->ir_builder->CreateSExtOrTrunc(
+                        llvm_visitor->eval_expression(upper),
+                        llvm_visitor->llvm_types.i64);
+
+                llvm::Value *val_idx
+                    = llvm_visitor->ir_builder->CreateSExtOrTrunc(
+                        llvm_visitor->eval_expression(index),
+                        llvm_visitor->llvm_types.i64);
+
+                llvm::Value *val_offset
+                    = llvm_visitor->ir_builder->CreateSub(val_idx, val_lower);
+                offset_list.push_back(val_offset);
+
+                if (is_vla)
+                {
+                    llvm::Value *val_size = llvm_visitor->ir_builder->CreateAdd(
+                        llvm_visitor->ir_builder->CreateSub(val_upper,
+                                                            val_lower),
+                        llvm_visitor->get_integer_value_64(1));
+                    size_list.push_back(val_size);
+                }
+
+                current_array_type = current_array_type.array_element();
+            }
+
+            llvm::Value *subscripted_val
+                = llvm_visitor->eval_expression(subscripted);
+            if (!is_vla)
+            {
+                // For constant sized arrays use a GEP
+                value = llvm_visitor->ir_builder->CreateGEP(subscripted_val,
+                                                            offset_list);
+            }
+            else
+            {
+                // Otherwise just compute an offset in elements using Horner's rule.
+                std::vector<llvm::Value *>::iterator it_offsets = offset_list.begin();
+                std::vector<llvm::Value *>::iterator it_sizes = size_list.begin();
+
+                llvm::Value* val_addr = *it_offsets;
+                it_offsets++;
+                it_sizes++;
+
+                while (it_offsets != offset_list.end()
+                       && it_sizes != size_list.end())
+                {
+                    val_addr = llvm_visitor->ir_builder->CreateAdd(
+                        *it_offsets,
+                        llvm_visitor->ir_builder->CreateMul(*it_sizes, val_addr));
+
+                    it_offsets++;
+                    it_sizes++;
+                }
+                ERROR_CONDITION(it_offsets != offset_list.end()
+                                    || it_sizes != size_list.end(),
+                                "Lists do not match", 0);
+
+                // Now multiply by the size of the type to get an offset in bytes
+                ERROR_CONDITION(current_array_type.is_array(), "Should not be an array here", 0);
+                val_addr = llvm_visitor->ir_builder->CreateMul(val_addr, llvm_visitor->eval_sizeof64(current_array_type));
+
+                // And add this offset in bytes to the base
+                val_addr = llvm_visitor->ir_builder->CreateAdd(
+                    llvm_visitor->ir_builder->CreatePtrToInt(
+                        subscripted_val, llvm_visitor->llvm_types.i64),
+                    val_addr);
+
+                value = llvm_visitor->ir_builder->CreateIntToPtr(val_addr, subscripted_val->getType());
+            }
+        }
     }
 
     void visit(const Nodecl::FunctionCall& node)
@@ -884,25 +1002,39 @@ llvm::Value *FortranLLVM::eval_expression(Nodecl::NodeclBase n)
     return v.get_value();
 }
 
-llvm::Value *FortranLLVM::create_alloca(llvm::Type *t,
-                                   llvm::Value *array_size,
-                                   const llvm::Twine &name)
+llvm::IRBuilderBase::InsertPoint FortranLLVM::change_to_allocating_block()
 {
-    llvm::IRBuilderBase::InsertPoint savedIP = ir_builder->saveIP();
+    llvm::IRBuilderBase::InsertPoint saved_ip = ir_builder->saveIP();
 
     llvm::BasicBlock *alloca_bb = allocating_block();
 
     // FIXME: I'm pretty sure it is possible to do this better.
     llvm::BasicBlock::iterator bb_it = alloca_bb->begin();
     while (bb_it != alloca_bb->end()
-            && llvm::isa<llvm::AllocaInst>(*bb_it))
+            && !bb_it->isTerminator())
         bb_it++;
 
     ir_builder->SetInsertPoint(alloca_bb, bb_it);
+
+    return saved_ip;
+}
+
+void FortranLLVM::return_from_allocating_block(llvm::IRBuilderBase::InsertPoint previous_ip)
+{
+    ir_builder->restoreIP(previous_ip);
+}
+
+llvm::Value *FortranLLVM::create_alloca(llvm::Type *t,
+                                   llvm::Value *array_size,
+                                   const llvm::Twine &name)
+{
+    llvm::IRBuilderBase::InsertPoint saved_ip = change_to_allocating_block();
+
     llvm::Value *tmp
         = ir_builder->CreateAlloca(t, array_size, name);
 
-    ir_builder->restoreIP(savedIP);
+    return_from_allocating_block(saved_ip);
+
     return tmp;
 }
 
@@ -924,15 +1056,26 @@ llvm::Value *FortranLLVM::eval_expression_to_memory(Nodecl::NodeclBase n)
     return result;
 }
 
-// class FortranVisitorLLVMExpressionSizeof : public FortranVisitorLLVMExpressionBase
-// {
-// };
-
-// FIXME - Maybe this should return i64?
+llvm::Value *FortranLLVM::eval_sizeof(TL::Type t)
+{
+    return ir_builder->CreateZExtOrTrunc(eval_sizeof64(t), llvm_types.i32);
+}
 llvm::Value *FortranLLVM::eval_sizeof(Nodecl::NodeclBase n)
 {
-    return get_integer_value_32(n.get_type().no_ref().get_size());
+    return eval_sizeof(n.get_type());
 }
+
+llvm::Value *FortranLLVM::eval_sizeof64(Nodecl::NodeclBase n)
+{
+    return eval_sizeof(n.get_type());
+}
+
+llvm::Value *FortranLLVM::eval_sizeof64(TL::Type t)
+{
+    // TODO: Eventually this will become more complicated
+    return get_integer_value_64(t.no_ref().get_size());
+}
+
 
 llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
 {
@@ -988,9 +1131,18 @@ llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
         return llvm::ArrayType::get(get_llvm_type(t.array_element()),
                                     const_value_cast_to_8(size.get_constant()));
     }
+    else if (t.is_array()
+            && t.array_is_vla())
+    {
+        // Use the element type
+        while (t.is_array())
+            t = t.array_element();
+
+        return get_llvm_type(t);
+    }
     else
     {
-        internal_error("Cannot convert type '%s' to LLVM type",
+        internal_error("Cannot synthesize LLVM type for type '%s'",
                        print_declarator(t.get_internal_type()));
     }
 }
@@ -1003,9 +1155,32 @@ void FortranLLVM::emit_variable(TL::Symbol sym)
     if (get_value(sym) != NULL)
         return;
 
-    llvm::Value *allocation = create_alloca(get_llvm_type(sym.get_type()),
-                                           /* array_size */ nullptr,
-                                           sym.get_name());
+    llvm::Value *array_size = nullptr;
+    if (sym.get_type().is_array() && sym.get_type().array_is_vla())
+    {
+        // Emit size
+        llvm::IRBuilderBase::InsertPoint previous_ip = change_to_allocating_block();
+
+        TL::Type t = sym.get_type();
+        llvm::Value *val_size = eval_expression(t.array_get_size());
+        t = t.array_element();
+
+        while (t.is_array())
+        {
+            val_size = ir_builder->CreateMul(
+                val_size, eval_expression(t.array_get_size()));
+            t = t.array_element();
+        }
+        array_size = val_size;
+
+        if (ir_builder->GetInsertBlock() != allocating_block())
+            internal_error("We have split the allocating block. Not implemented yet", 0);
+
+        return_from_allocating_block(previous_ip);
+    }
+
+    llvm::Value *allocation = create_alloca(
+        get_llvm_type(sym.get_type()), array_size, sym.get_name());
     map_symbol_to_value(sym, allocation);
 }
 

@@ -56,6 +56,7 @@ namespace Codegen
         void visit(const Nodecl::Context &node);
         void visit(const Nodecl::CompoundStatement &node);
         void visit(const Nodecl::ExpressionStatement &node);
+        void visit(const Nodecl::ObjectInit &node);
         void visit(const Nodecl::IfElseStatement& node);
         void visit(const Nodecl::ForStatement& node);
         void visit(const Nodecl::FortranPrintStatement& node);
@@ -205,6 +206,8 @@ namespace Codegen
             ERROR_CONDITION(stack_alloca_bb.empty(), "Stack of allocating basic blocks is empty", 0);
             return stack_alloca_bb.back();
         }
+        llvm::IRBuilderBase::InsertPoint change_to_allocating_block();
+        void return_from_allocating_block(llvm::IRBuilderBase::InsertPoint PreviousIP);
         // Intentionally similar to CreateAlloca but creates it in the allocating_block
         llvm::Value *create_alloca(llvm::Type *t,
                                    llvm::Value *array_size = nullptr,
@@ -221,6 +224,9 @@ namespace Codegen
 
         // Compute the number of bytes used by an expression ignoring references
         llvm::Value *eval_sizeof(Nodecl::NodeclBase n);
+        llvm::Value *eval_sizeof64(Nodecl::NodeclBase n);
+        llvm::Value *eval_sizeof(TL::Type);
+        llvm::Value *eval_sizeof64(TL::Type);
 
         llvm::Constant* get_integer_value_N(int64_t v, llvm::Type* t, int bits);
 
