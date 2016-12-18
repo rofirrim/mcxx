@@ -614,6 +614,14 @@ namespace TL
         return array_type_get_element_type(_type_info);
     }
 
+    Type Type::array_base_element() const
+    {
+        TL::Type result = *this;
+        while (result.is_array())
+            result = array_type_get_element_type(result._type_info);
+        return result;
+    }
+
     bool Type::array_is_vla() const
     {
         return array_type_is_vla(_type_info);
