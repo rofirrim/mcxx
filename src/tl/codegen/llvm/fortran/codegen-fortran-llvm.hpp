@@ -212,6 +212,8 @@ namespace Codegen
 
         void emit_variable(TL::Symbol sym);
 
+        llvm::Value* evaluate_size_of_array(TL::Type sym);
+
         llvm::Value *gep_for_field(
             llvm::Type *struct_type,
             llvm::Value *addr,
@@ -221,9 +223,9 @@ namespace Codegen
 
         // Compute the number of bytes used by an expression ignoring references
         llvm::Value *eval_sizeof(Nodecl::NodeclBase n);
-        llvm::Value *eval_sizeof64(Nodecl::NodeclBase n);
+        llvm::Value *eval_sizeof_64(Nodecl::NodeclBase n);
         llvm::Value *eval_sizeof(TL::Type);
-        llvm::Value *eval_sizeof64(TL::Type);
+        llvm::Value *eval_sizeof_64(TL::Type);
 
         llvm::Constant* get_integer_value_N(int64_t v, llvm::Type* t, int bits);
 
