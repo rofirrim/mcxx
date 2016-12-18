@@ -499,6 +499,92 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                && !n.no_conv().get_type().no_ref().is_array();
     }
 
+    llvm::Value *add_offset_to_address(llvm::Value *base, llvm::Value *offset)
+    {
+        return llvm_visitor->ir_builder->CreateIntToPtr(
+            llvm_visitor->ir_builder->CreateAdd(
+                llvm_visitor->ir_builder->CreatePtrToInt(base,
+                                                         offset->getType()),
+                offset),
+            base->getType());
+    }
+
+    void array_assignment_in_place(const Nodecl::NodeclBase &lhs,
+                                  const Nodecl::NodeclBase &rhs,
+                                  TL::Type lhs_type,
+                                  TL::Type rhs_type,
+                                  llvm::Value *lhs_addr,
+                                  llvm::Value *rhs_addr)
+    {
+        // FIXME - Use the easiest of the two to compute
+        llvm::Value *dim_idx = llvm_visitor->ir_builder->CreateAlloca(llvm_visitor->llvm_types.i64, nullptr, "array_op_idx.addr");
+        llvm::Value *dim_size = llvm_visitor->evaluate_elements_of_dimension(lhs_type);
+
+        create_array_op_loop(
+            dim_idx,
+            dim_size,
+            [&, this]()
+            {
+                llvm::Value *dim_idx_value = llvm_visitor->ir_builder->CreateLoad(dim_idx, "array_op_idx.val");
+
+                // The rank of both arrays is the same, so checking either should do
+                if (!lhs_type.array_element().is_array())
+                {
+                    // We are now at the elemental level
+
+                    TL::Type lhs_element_type = lhs_type.array_base_element();
+                    TL::Type rhs_element_type = rhs_type.array_base_element();
+
+                    llvm::Value *lhs_elem_offset
+                        = compute_offset_from_linear_element(
+                            lhs_type, dim_idx_value);
+                    llvm::Value *lhs_elem_addr
+                        = add_offset_to_address(lhs_addr, lhs_elem_offset);
+
+                    llvm::Value *rhs_elem_val;
+                    if (is_scalar_to_array(rhs))
+                    {
+                        rhs_elem_val = rhs_addr;
+                    }
+                    else
+                    {
+                        llvm::Value *rhs_elem_offset
+                            = compute_offset_from_linear_element(
+                                rhs_type, dim_idx_value);
+                        llvm::Value *rhs_elem_addr = add_offset_to_address(rhs_addr, rhs_elem_offset);
+                        rhs_elem_val = llvm_visitor->ir_builder->CreateLoad(
+                            rhs_elem_addr);
+                    }
+
+                    // Store
+                    llvm_visitor->ir_builder->CreateStore(rhs_elem_val,
+                                                          lhs_elem_addr);
+                }
+                else
+                {
+                    llvm::Value *lhs_offset
+                        = compute_offset_from_linear_element(lhs_type,
+                                                             dim_idx_value);
+                    lhs_addr = add_offset_to_address(lhs_addr, lhs_offset);
+
+                    // Another dimension. Update offsets if necessary
+                    if (!is_scalar_to_array(rhs))
+                    {
+                        llvm::Value *rhs_offset = compute_offset_from_linear_element(
+                            rhs_type, dim_idx_value);
+                        rhs_addr = add_offset_to_address(rhs_addr, rhs_offset);
+                    }
+
+                    array_assignment_in_place(lhs,
+                                              rhs,
+                                              lhs_type.array_element(),
+                                              rhs_type.array_element(),
+                                              lhs_addr,
+                                              rhs_addr);
+                }
+            });
+    }
+
     void visit(const Nodecl::Assignment& node)
     {
         llvm::Value *vlhs = llvm_visitor->eval_expression(node.get_lhs());
@@ -523,46 +609,13 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             }
             else
             {
-                ERROR_CONDITION(lhs_type.array_is_region()
-                                    || rhs_type.array_is_region(),
-                                "Regions not implemented yet",
-                                0);
-
-                // Do a loop of stores
-                llvm::Value *idx_var = llvm_visitor->ir_builder->CreateAlloca(
-                    llvm_visitor->llvm_types.i64, nullptr, "array_op_idx.addr");
-                llvm::Value *array_size
-                    = llvm_visitor->evaluate_size_of_array(lhs_type);
-                create_array_op_loop(
-                    idx_var,
-                    array_size,
-                    [&, this]()
-                    {
-                        llvm::Value *idx_value
-                            = llvm_visitor->ir_builder->CreateLoad(
-                                idx_var, "array_op_idx.val");
-                        llvm::Value *lhs_elem_addr
-                            = compute_addr_from_linear_element(
-                                lhs_type, vlhs, idx_value);
-
-                        if (is_scalar_to_array(node.get_rhs()))
-                        {
-                            llvm_visitor->ir_builder->CreateStore(
-                                vrhs, lhs_elem_addr);
-                        }
-                        else
-                        {
-                            llvm::Value *rhs_elem_addr
-                                = compute_addr_from_linear_element(
-                                    rhs_type, vrhs, idx_value);
-                            llvm::Value *rhs_elem_val
-                                = llvm_visitor->ir_builder->CreateLoad(
-                                    rhs_elem_addr);
-
-                            llvm_visitor->ir_builder->CreateStore(
-                                rhs_elem_val, lhs_elem_addr);
-                        }
-                    });
+                // FIXME - If either side is an array section we must use array_assignment_via_temp
+                array_assignment_in_place(node.get_lhs(),
+                        node.get_rhs(),
+                        lhs_type,
+                        rhs_type,
+                        vlhs,
+                        vrhs);
 
                 value = vlhs;
             }
@@ -731,11 +784,13 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         }
     }
 
-    llvm::Value *compute_addr_from_linear_element(TL::Type t, llvm::Value* addr, llvm::Value* idx_value)
+    llvm::Value *compute_offset_from_linear_element(TL::Type t, llvm::Value* idx_value)
     {
         ERROR_CONDITION(!t.is_array(), "Invalid type", 0);
 
-        TL::Type element_type = t.array_base_element();
+        TL::Type element_type = t.array_element();
+        llvm::Value *element_size_bytes
+            = llvm_visitor->eval_sizeof_64(element_type);
 
         if (t.array_requires_descriptor())
         {
@@ -743,26 +798,86 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         }
         else if (t.array_is_region())
         {
-            // FIXME - This could be contiguous
-            internal_error("Not yet implemented", 0);
+            // The idea is that evaluate_elements_of_dimension has taken into
+            // account the array subscript, so given an array subscript
+            // A(L:U:S) and an index I the address we want to compute is L + I
+            // * S, if S > 0, or U + I * S, if S < 0.
+            Nodecl::NodeclBase region_lower
+                = array_type_get_region_lower_bound(t.get_internal_type());
+            Nodecl::NodeclBase region_upper
+                = array_type_get_region_upper_bound(t.get_internal_type());
+            Nodecl::NodeclBase stride
+                = array_type_get_region_stride(t.get_internal_type());
+
+            // We try to be a bit smart here
+            llvm::Value *offset = nullptr;
+            if (stride.is_constant())
+            {
+                const_value_t *cval_stride = stride.get_constant();
+                if (const_value_is_positive(cval_stride))
+                {
+                    llvm::Value *vregion_lower
+                        = llvm_visitor->eval_expression(region_lower);
+                    if (const_value_is_one(cval_stride))
+                    {
+                        // Simplest case (L + I)
+                        offset = llvm_visitor->ir_builder->CreateAdd(
+                            vregion_lower, idx_value);
+                    }
+                    else
+                    {
+                        // (L + I * S)
+                        llvm::Value *vstride
+                            = llvm_visitor->eval_expression(stride);
+                        offset = llvm_visitor->ir_builder->CreateAdd(
+                            vregion_lower,
+                            llvm_visitor->ir_builder->CreateMul(idx_value,
+                                                                vstride));
+                    }
+                }
+                else if (const_value_is_negative(cval_stride))
+                {
+                    // (U + I * S), S < 0
+                    llvm::Value *vregion_upper
+                        = llvm_visitor->eval_expression(region_upper);
+                    llvm::Value *vstride
+                        = llvm_visitor->eval_expression(stride);
+                    offset = llvm_visitor->ir_builder->CreateAdd(
+                        vregion_upper,
+                        llvm_visitor->ir_builder->CreateMul(idx_value,
+                                                            vstride));
+                }
+                else
+                {
+                    internal_error("Code unreachable", 0);
+                }
+
+                // Offset with the lower element of the array (which may not be
+                // the same as the region)
+                Nodecl::NodeclBase array_lower
+                    = array_type_get_array_lower_bound(t.get_internal_type());
+                llvm::Value *varray_lower
+                    = llvm_visitor->eval_expression(array_lower);
+                offset
+                    = llvm_visitor->ir_builder->CreateSub(offset, varray_lower);
+
+                // Multiply with element size
+                offset = llvm_visitor->ir_builder->CreateMul(element_size_bytes,
+                                                             offset);
+                return offset;
+            }
+            else
+            {
+                internal_error("Not implemented yet", 0);
+            }
         }
         else
         {
             // Contiguous array
-            llvm::Value *base_addr = llvm_visitor->ir_builder->CreatePtrToInt(
-                addr, llvm_visitor->llvm_types.i64);
-
             llvm::Value *offset = llvm_visitor->ir_builder->CreateMul(
-                idx_value, llvm_visitor->eval_sizeof_64(element_type));
+                element_size_bytes, idx_value);
 
-            llvm::Value *addr
-                = llvm_visitor->ir_builder->CreateAdd(base_addr, offset);
-
-            return llvm_visitor->ir_builder->CreateIntToPtr(
-                addr,
-                llvm::PointerType::get(
-                    llvm_visitor->get_llvm_type(element_type),
-                    /* AddressSpace */ 0));
+            return offset;
         }
     }
 
@@ -806,6 +921,136 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         llvm_visitor->set_current_block(block_end);
     }
 
+    template <typename CreateSInt, typename CreateFloat>
+    void arithmetic_binary_operator_array_loop(const Nodecl::NodeclBase &lhs,
+                                               const Nodecl::NodeclBase &rhs,
+                                               TL::Type lhs_type,
+                                               TL::Type rhs_type,
+                                               llvm::Value *lhs_addr,
+                                               llvm::Value *rhs_addr,
+                                               llvm::Value *result_addr,
+                                               llvm::Value *result_idx_addr,
+                                               CreateSInt create_sint,
+                                               CreateFloat create_float)
+    {
+        // FIXME - Use the easiest of the two to compute
+        llvm::Value *dim_idx = llvm_visitor->ir_builder->CreateAlloca(llvm_visitor->llvm_types.i64);
+        llvm::Value *dim_size = llvm_visitor->evaluate_elements_of_dimension(lhs_type);
+
+        create_array_op_loop(
+            dim_idx,
+            dim_size,
+            [&, this]()
+            {
+                llvm::Value *dim_idx_value = llvm_visitor->ir_builder->CreateLoad(dim_idx);
+
+                // The rank of both arrays is the same, so checking either should do
+                if (!lhs_type.array_element().is_array())
+                {
+                    // We are now at the elemental level
+
+                    TL::Type lhs_element_type = lhs_type.array_base_element();
+                    TL::Type rhs_element_type = rhs_type.array_base_element();
+
+                    llvm::Value *lhs_elem_val;
+                    if (is_scalar_to_array(lhs))
+                    {
+                        lhs_elem_val = lhs_addr;
+                    }
+                    else
+                    {
+                        llvm::Value *lhs_elem_offset
+                            = compute_offset_from_linear_element(
+                                lhs_type, dim_idx_value);
+                        llvm::Value *lhs_elem_addr
+                            = add_offset_to_address(lhs_addr, lhs_elem_offset);
+                        lhs_elem_val = llvm_visitor->ir_builder->CreateLoad(
+                            lhs_elem_addr);
+                    }
+
+                    llvm::Value *rhs_elem_val;
+                    if (is_scalar_to_array(rhs))
+                    {
+                        rhs_elem_val = rhs_addr;
+                    }
+                    else
+                    {
+                        llvm::Value *rhs_elem_offset
+                            = compute_offset_from_linear_element(
+                                rhs_type, dim_idx_value);
+                        llvm::Value *rhs_elem_addr
+                            = add_offset_to_address(rhs_addr, rhs_elem_offset);
+                        rhs_elem_val = llvm_visitor->ir_builder->CreateLoad(
+                            rhs_elem_addr);
+                    }
+
+                    llvm::Value *result_value
+                        = arithmetic_binary_op_elemental_intrinsic(
+                            lhs_element_type,
+                            rhs_element_type,
+                            lhs_elem_val,
+                            rhs_elem_val,
+                            create_sint,
+                            create_float);
+
+                    // Compute result address
+                    llvm::Value *result_idx_val
+                        = llvm_visitor->ir_builder->CreateLoad(result_idx_addr);
+                    llvm::Value *result_elem_addr
+                        = llvm_visitor->ir_builder->CreateMul(
+                            llvm_visitor->eval_sizeof_64(lhs_element_type),
+                            result_idx_val);
+
+                    result_elem_addr = llvm_visitor->ir_builder->CreateAdd(
+                        llvm_visitor->ir_builder->CreatePtrToInt(
+                            result_addr, llvm_visitor->llvm_types.i64),
+                        result_elem_addr);
+
+                    result_elem_addr = llvm_visitor->ir_builder->CreateIntToPtr(
+                        result_elem_addr, result_addr->getType());
+
+                    // Store result to result address
+                    llvm_visitor->ir_builder->CreateStore(result_value,
+                                                          result_elem_addr);
+                    // Increment result_idx
+                    llvm_visitor->ir_builder->CreateStore(
+                        llvm_visitor->ir_builder->CreateAdd(
+                            result_idx_val,
+                            llvm_visitor->get_integer_value_64(1)),
+                        result_idx_addr);
+                }
+                else
+                {
+                    // Another dimension. Update addresses if necessary
+                    if (!is_scalar_to_array(lhs))
+                    {
+                        llvm::Value *lhs_offset
+                            = compute_offset_from_linear_element(lhs_type,
+                                                                 dim_idx_value);
+                        lhs_addr = add_offset_to_address(lhs_addr, lhs_offset);
+                    }
+                    if (!is_scalar_to_array(rhs))
+                    {
+                        llvm::Value *rhs_offset
+                            = compute_offset_from_linear_element(rhs_type,
+                                                                 dim_idx_value);
+                        rhs_addr = add_offset_to_address(rhs_addr, rhs_offset);
+                    }
+
+                    arithmetic_binary_operator_array_loop(
+                        lhs,
+                        rhs,
+                        lhs_type.array_element(),
+                        rhs_type.array_element(),
+                        lhs_addr,
+                        rhs_addr,
+                        result_addr,
+                        result_idx_addr,
+                        create_sint,
+                        create_float);
+                }
+            });
+    }
 
     template <typename CreateSInt, typename CreateFloat>
     void arithmetic_binary_operator_array(const Nodecl::NodeclBase &lhs,
@@ -820,12 +1065,12 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         TL::Type rhs_element_type = rhs_type.array_base_element();
 
         ERROR_CONDITION(!lhs_element_type.is_same_type(rhs_element_type),
-                        "Not implemented yet",
+                        "Should not happen",
                         0);
 
         // TODO: Select easiest of the two to compute
         llvm::Value *array_size
-            = llvm_visitor->evaluate_size_of_array(lhs_type);
+            = llvm_visitor->evaluate_elements_of_array(lhs_type);
 
         // Evaluate addresses
         llvm::Value *lhs_addr = llvm_visitor->eval_expression(lhs);
@@ -835,59 +1080,22 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         llvm::Value *result_addr = llvm_visitor->ir_builder->CreateAlloca(
             llvm_visitor->get_llvm_type(lhs_element_type), array_size);
 
-        // Now create a loop
-        llvm::Value *idx_var = llvm_visitor->ir_builder->CreateAlloca(llvm_visitor->llvm_types.i64, nullptr, "array_op_idx.addr");
+        // Index inside the contiguous result array
+        llvm::Value *result_idx_addr = llvm_visitor->ir_builder->CreateAlloca(
+            llvm_visitor->llvm_types.i64);
+        llvm_visitor->ir_builder->CreateStore(
+            llvm_visitor->get_integer_value_64(0), result_idx_addr);
 
-        create_array_op_loop(
-            idx_var,
-            array_size,
-            [&, this]()
-            {
-                llvm::Value *idx_value = llvm_visitor->ir_builder->CreateLoad(
-                    idx_var, "array_op_idx.val");
-
-                llvm::Value *lhs_elem_val;
-                if (is_scalar_to_array(lhs))
-                {
-                    lhs_elem_val = lhs_addr;
-                }
-                else
-                {
-                    llvm::Value *lhs_elem_addr
-                        = compute_addr_from_linear_element(
-                            lhs_type, lhs_addr, idx_value);
-                    lhs_elem_val
-                        = llvm_visitor->ir_builder->CreateLoad(lhs_elem_addr);
-                }
-
-                llvm::Value *rhs_elem_val;
-                if (is_scalar_to_array(rhs))
-                {
-                    rhs_elem_val = rhs_addr;
-                }
-                else
-                {
-                    llvm::Value *rhs_elem_addr
-                        = compute_addr_from_linear_element(
-                            rhs_type, rhs_addr, idx_value);
-                    rhs_elem_val
-                        = llvm_visitor->ir_builder->CreateLoad(rhs_elem_addr);
-                }
-
-                llvm::Value *result_value
-                    = arithmetic_binary_op_elemental_intrinsic(lhs_element_type,
-                                                               rhs_element_type,
-                                                               lhs_elem_val,
-                                                               rhs_elem_val,
-                                                               create_sint,
-                                                               create_float);
-
-                llvm::Value *result_elem_addr
-                    = compute_addr_from_linear_element(
-                        lhs_type, result_addr, idx_value);
-                llvm_visitor->ir_builder->CreateStore(result_value,
-                                                      result_elem_addr);
-            });
+        arithmetic_binary_operator_array_loop(lhs,
+                                              rhs,
+                                              lhs_type,
+                                              rhs_type,
+                                              lhs_addr,
+                                              rhs_addr,
+                                              result_addr,
+                                              result_idx_addr,
+                                              create_sint,
+                                              create_float);
 
         value = result_addr;
     }
@@ -917,8 +1125,10 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             if (lhs_type.is_array() == rhs_type.is_array())
             {
                 if (!lhs_type.array_is_vla()
+                    && !lhs_type.array_is_region()
                     && !lhs_type.array_requires_descriptor()
                     && !rhs_type.array_is_vla()
+                    && !rhs_type.array_is_region()
                     && !rhs_type.array_requires_descriptor())
                 {
                     // If both are statically sized arrays we use LLVM IR
@@ -1103,6 +1313,14 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         {
             internal_error("Not yet implemented", 0);
         }
+        else if (node.get_type().no_ref().is_array()
+                && node.get_type().no_ref().array_is_region())
+        {
+            llvm::Value *subscripted_val
+                = llvm_visitor->eval_expression(subscripted);
+            // We will compute everything based on the region described in the type
+            value = subscripted_val;
+        }
         else
         {
             bool is_vla = subscripted_type_noref.array_is_vla();
@@ -1134,6 +1352,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                         llvm_visitor->eval_expression(upper),
                         llvm_visitor->llvm_types.i64);
 
+                ERROR_CONDITION(index.is<Nodecl::Range>(), "Invalid subscript here", 0);
                 llvm::Value *val_idx
                     = llvm_visitor->ir_builder->CreateSExtOrTrunc(
                         llvm_visitor->eval_expression(index),
@@ -1402,10 +1621,16 @@ llvm::Value *FortranLLVM::eval_sizeof_64(Nodecl::NodeclBase n)
 
 llvm::Value *FortranLLVM::eval_sizeof_64(TL::Type t)
 {
-    // TODO: Eventually this will become more complicated
-    return get_integer_value_64(t.no_ref().get_size());
+    if (t.is_array())
+    {
+        return ir_builder->CreateMul(evaluate_size_of_array(t),
+                                     eval_sizeof_64(t.array_base_element()));
+    }
+    else
+    {
+        return get_integer_value_64(t.no_ref().get_size());
+    }
 }
-
 
 llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
 {
@@ -1474,6 +1699,23 @@ llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
     }
 }
 
+llvm::Value* FortranLLVM::evaluate_size_of_dimension(TL::Type t)
+{
+    ERROR_CONDITION(!t.is_array(), "Invalid type", 0);
+
+    llvm::Value *current_size = nullptr;
+    if (t.array_requires_descriptor())
+    {
+        internal_error("Not yet implemented", 0);
+    }
+    else
+    {
+        current_size = eval_expression(t.array_get_size());
+    }
+
+    return current_size;
+}
+
 llvm::Value* FortranLLVM::evaluate_size_of_array(TL::Type t)
 {
     ERROR_CONDITION(!t.is_array(), "Invalid type", 0);
@@ -1483,14 +1725,82 @@ llvm::Value* FortranLLVM::evaluate_size_of_array(TL::Type t)
     }
     else 
     {
-        // VLA or constant-sized
-        llvm::Value *val_size = eval_expression(t.array_get_size());
-        t = t.array_element();
-
+        llvm::Value *val_size = nullptr;
         while (t.is_array())
         {
-            val_size = ir_builder->CreateMul(
-                val_size, eval_expression(t.array_get_size()));
+            llvm::Value *current_size = evaluate_size_of_dimension(t);
+
+            if (val_size == nullptr)
+                val_size = current_size;
+            else
+                val_size = ir_builder->CreateMul(val_size, current_size);
+
+            t = t.array_element();
+        }
+
+        return val_size;
+    }
+}
+
+llvm::Value* FortranLLVM::evaluate_elements_of_dimension(TL::Type t)
+{
+    ERROR_CONDITION(!t.is_array(), "Invalid type", 0);
+
+    llvm::Value *current_size = nullptr;
+    if (t.array_requires_descriptor())
+    {
+        internal_error("Not yet implemented", 0);
+    }
+    else
+    {
+        if (t.array_is_region())
+        {
+            // We cannot use TL::Type functions here because they are
+            // oblivious of the step (they assume step=1)
+            Nodecl::NodeclBase lower
+                = array_type_get_region_lower_bound(t.get_internal_type());
+            Nodecl::NodeclBase upper
+                = array_type_get_region_upper_bound(t.get_internal_type());
+            Nodecl::NodeclBase stride
+                = array_type_get_region_stride(t.get_internal_type());
+
+            llvm::Value *vlower = eval_expression(lower);
+            llvm::Value *vupper = eval_expression(upper);
+            llvm::Value *vstride = eval_expression(stride);
+
+            current_size = ir_builder->CreateSDiv(
+                ir_builder->CreateAdd(ir_builder->CreateSub(vupper, vlower),
+                                      vstride),
+                vstride);
+        }
+        else
+        {
+            current_size = eval_expression(t.array_get_size());
+        }
+    }
+
+    return current_size;
+}
+
+llvm::Value* FortranLLVM::evaluate_elements_of_array(TL::Type t)
+{
+    ERROR_CONDITION(!t.is_array(), "Invalid type", 0);
+    if (t.array_requires_descriptor())
+    {
+        internal_error("Not yet implemented", 0);
+    }
+    else 
+    {
+        llvm::Value *val_size = nullptr;
+        while (t.is_array())
+        {
+            llvm::Value *current_size = evaluate_elements_of_dimension(t);
+
+            if (val_size == nullptr)
+                val_size = current_size;
+            else
+                val_size = ir_builder->CreateMul(val_size, current_size);
+
             t = t.array_element();
         }
 

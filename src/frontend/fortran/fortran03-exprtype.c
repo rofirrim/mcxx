@@ -6383,6 +6383,86 @@ static void conform_types(type_t* lhs_type, type_t* rhs_type,
             /* conform_only_left */ 0);
 }
 
+static type_t* fortran_rebuild_array_type_for_rerank(type_t* rank0_type, type_t* array_type)
+{
+    rank0_type = no_ref(rank0_type);
+
+    // ERROR_CONDITION(!fortran_is_scalar_type(rank0_type)
+    //         && !fortran_is_character_type(rank0_type), "Invalid rank0 type", 0);
+
+    if (!fortran_is_array_type(array_type))
+    {
+        return rank0_type;
+    }
+    else
+    {
+        type_t* t = fortran_rebuild_array_type(rank0_type, array_type_get_element_type(array_type));
+
+        if (array_type_has_region(array_type))
+        {
+            if (nodecl_is_constant(array_type_get_region_stride(array_type))
+                && const_value_is_one(nodecl_get_constant(
+                       array_type_get_region_stride(array_type))))
+            {
+                // Common case
+                return get_array_type_bounds(
+                    t,
+                    array_type_get_region_lower_bound(array_type),
+                    array_type_get_region_upper_bound(array_type),
+                    array_type_get_array_size_expr_context(array_type));
+            }
+            else
+            {
+                // TODO: Some of these cases may be improved if all elements of
+                // the region are constant
+                //
+                // A region array (X:Y) with region [L:U:S] becomes a
+                // (non-region) array with length (U - L + S) / S
+                type_t *array_size_type = no_ref(nodecl_get_type(
+                    array_type_get_region_upper_bound(array_type)));
+                const locus_t *array_size_locus = nodecl_get_locus(
+                    array_type_get_region_upper_bound(array_type));
+
+                nodecl_t array_size_expr = nodecl_make_div(
+                    nodecl_make_add(
+                        nodecl_make_minus(
+                            nodecl_shallow_copy(
+                                array_type_get_region_upper_bound(array_type)),
+                            nodecl_shallow_copy(
+                                array_type_get_region_lower_bound(array_type)),
+                            array_size_type,
+                            array_size_locus),
+                        nodecl_shallow_copy(
+                            array_type_get_region_stride(array_type)),
+                        array_size_type,
+                        array_size_locus),
+                    nodecl_shallow_copy(
+                        array_type_get_region_stride(array_type)),
+                    array_size_type,
+                    array_size_locus);
+                return get_array_type(
+                    t,
+                    array_size_expr,
+                    array_type_get_array_size_expr_context(array_type));
+            }
+        }
+        else if (array_type_with_descriptor(array_type))
+        {
+            return get_array_type_bounds_with_descriptor(t, 
+                    array_type_get_array_lower_bound(array_type),
+                    array_type_get_array_upper_bound(array_type),
+                    array_type_get_array_size_expr_context(array_type));
+        }
+        else 
+        {
+            return get_array_type_bounds(t, 
+                    array_type_get_array_lower_bound(array_type),
+                    array_type_get_array_upper_bound(array_type),
+                    array_type_get_array_size_expr_context(array_type));
+        }
+    }
+}
+
 static type_t* rerank_type(type_t* rank0_common, type_t* lhs_type, type_t* rhs_type)
 {
     lhs_type = no_ref(lhs_type);
@@ -6394,11 +6474,11 @@ static type_t* rerank_type(type_t* rank0_common, type_t* lhs_type, type_t* rhs_t
     if (fortran_is_array_type(lhs_type))
     {
         // They should have the same rank and shape so it does not matter very much which one we use, right?
-        return fortran_rebuild_array_type(rank0_common, lhs_type);
+        return fortran_rebuild_array_type_for_rerank(rank0_common, lhs_type);
     }
     else if (fortran_is_array_type(rhs_type))
     {
-        return fortran_rebuild_array_type(rank0_common, rhs_type);
+        return fortran_rebuild_array_type_for_rerank(rank0_common, rhs_type);
     }
     else
     {
