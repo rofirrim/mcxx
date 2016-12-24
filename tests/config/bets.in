@@ -357,7 +357,7 @@ runner_local ()
    echo $env $test_exec_command $tmpdir/$exec $args >> $tmpfile
 
    log sh $tmpfile
-   sh $tmpfile >> $logfile
+   sh $tmpfile
    local ret=$?
 
    return $ret
@@ -490,6 +490,8 @@ execute ()
    local version=$1
    local exec=$2
    local cversion=$3
+   local test_stdout=$4
+   local test_stderr=$5
    local env
    local args
 
@@ -500,8 +502,53 @@ execute ()
 
    eval local runner_used=\${runner_$cversion:-\${runner:-runner_local}}
 
-   ${runner_used} "$tmpdir" "$exe" "$args" "$env"
+   local tmp_stdout=$(mktemp)
+   local tmp_stderr=$(mktemp)
+   ${runner_used} "$tmpdir" "$exe" "$args" "$env" 1> $tmp_stdout 2> $tmp_stderr
    local ret=$?
+
+   # Propagate stdout
+   cat $tmp_stdout
+   cat $tmp_stderr 1>&2
+
+   if [ -n "$test_stdout" -a $ret = 0 ];
+   then
+       local tmp_diff=$(mktemp)
+       log "Checking standard output"
+       log diff -u "$tmp_stdout" "$test_stdout"
+       diff -u "$tmp_stdout" "$test_stdout" &> $tmp_diff
+       ret=$?
+       if [ $ret != 0 ];
+       then
+           log "Check standard output FAILED. See diff below"
+           cat $tmp_diff >> $logfile
+       else
+           log "Check standard output OK"
+       fi
+       rm -f $tmp_diff
+       unset tmp_diff
+   fi
+
+   if [ -n "$test_stderr" -a $ret = 0 ];
+   then
+       local tmp_diff=$(mktemp)
+       log "Checking standard error"
+       log diff -u "$tmp_stderr" "$test_stderr"
+       diff -u "$tmp_stderr" "$test_stderr" &> $tmp_diff
+       ret=$?
+       if [ $ret != 0 ];
+       then
+           log "Check standard error FAILED. See diff below"
+           cat $tmp_diff >> $logfile
+       else
+           log "Check standard error OK"
+       fi
+       rm -f $tmp_diff
+       unset tmp_diff
+   fi
+
+   rm -f $tmp_stdout
+   rm -f $tmp_stderr
 
    return $ret
 }
@@ -569,7 +616,8 @@ run_test ()
    local type=$2
    local compressed=$3
    local name=$(basename ${source%.*})
-   local srcdir=$(pwd)
+   local testfile_srcdir=$(pwd)
+   local srcdir=${testfile_srcdir}
 
    run_pass=0
    run_fail=0
@@ -732,6 +780,23 @@ run_test ()
                    eval current_test_noexec=\${current_test_noexec:-\${test_nolink_$v}}
 
                    if [ -z "$current_test_noexec" ]; then
+                       # Setup output comparison
+                       eval current_test_stdout=\${test_stdout_${e}_${v}}
+                       eval current_test_stdout=\${current_test_stdout:-\${test_stdout_$e}}
+                       eval current_test_stdout=\${current_test_stdout:-\${test_stdout}}
+                       if [ -n "$current_test_stdout" ];
+                       then
+                           current_test_stdout="$testfile_srcdir/$current_test_stdout"
+                       fi
+
+                       eval current_test_stderr=\${test_stderr_${e}_${v}}
+                       eval current_test_stderr=\${current_test_stderr:-\${test_stderr_$e}}
+                       eval current_test_stderr=\${current_test_stderr:-\${test_stderr}}
+                       if [ -n "$current_test_stderr" ];
+                       then
+                           current_test_stderr="$testfile_srcdir/$current_test_stderr"
+                       fi
+
                        filtered_message -n "Execute test $name-$v-$e "
                        log "***Start execute test $name-$v-$e"
                        eval test_fail=\${test_exec_fail_${v}_${e}}
@@ -743,7 +808,7 @@ run_test ()
                        eval test_ignore_fail=\${test_ignore_fail}
                        eval test_exec_command=\${test_exec_command}
                        passfail "$name-$v-$e" execute $e $name $v
-                       log "***End execute test $name-$v-$e"
+                       log "***End execute test $name-$v-$e"                       
                    fi
 
                    unset current_test_noexec
