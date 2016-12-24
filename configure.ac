@@ -2509,6 +2509,7 @@ AC_CONFIG_FILES([tests/config/mercurium-cxx14], [chmod +x tests/config/mercurium
 AC_CONFIG_FILES([tests/config/mercurium-extensions], [chmod +x tests/config/mercurium-extensions])
 AC_CONFIG_FILES([tests/config/mercurium-fe-only], [chmod +x tests/config/mercurium-fe-only])
 AC_CONFIG_FILES([tests/config/mercurium-fortran], [chmod +x tests/config/mercurium-fortran])
+AC_CONFIG_FILES([tests/config/mercurium-fortran-llvm], [chmod +x tests/config/mercurium-fortran-llvm])
 AC_CONFIG_FILES([tests/config/mercurium-hlt], [chmod +x tests/config/mercurium-hlt])
 AC_CONFIG_FILES([tests/config/mercurium-iomp], [chmod +x tests/config/mercurium-iomp])
 AC_CONFIG_FILES([tests/config/mercurium-libraries], [chmod +x tests/config/mercurium-libraries])
@@ -2698,6 +2699,17 @@ then
   echo "   Extrae includes :" $extrae_include
   echo "   Extrae libraries:" $extrae_lib
   echo ""
+fi
+
+if test x$is_enabled_fortran_llvm_codegen = xyes;
+then
+    echo " Fortran to LLVM IR (EXPERIMENTAL) support is enabled"
+    echo "   LLVM_CONFIG  :" $LLVM_CONFIG
+    echo "   LLVM_CFLAGS  :" $LLVM_CFLAGS
+    echo "   LLVM_CXXFLAGS:" $LLVM_CXXFLAGS
+    echo "   LLVM_LIBS    :" $LLVM_LIBS
+    echo "   LLVM_BINDIR  :" $LLVM_BINDIR
+    echo ""
 fi
 
 if test x$show_mic_tools_warning = xyes;

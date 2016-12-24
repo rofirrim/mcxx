@@ -240,6 +240,11 @@ void FortranLLVM::visit(const Nodecl::ExpressionStatement &node)
     eval_expression(node.get_nest());
 }
 
+void FortranLLVM::visit(const Nodecl::EmptyStatement &)
+{
+    // Do nothing
+}
+
 void FortranLLVM::visit(const Nodecl::ObjectInit& node)
 {
     
