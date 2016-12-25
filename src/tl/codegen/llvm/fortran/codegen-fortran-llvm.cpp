@@ -245,6 +245,17 @@ void FortranLLVM::visit(const Nodecl::EmptyStatement &)
     // Do nothing
 }
 
+void FortranLLVM::visit(const Nodecl::FortranStopStatement &node)
+{
+    Nodecl::NodeclBase expr = node.get_stop_code(); 
+    ERROR_CONDITION(!expr.get_type().is_signed_integral(),
+        "Unsupported type '%s' in STOP expression", print_declarator(expr.get_type().get_internal_type()));
+    llvm::Value *v = eval_expression(expr);
+    v = ir_builder->CreateSExtOrTrunc(v, llvm_types.i32);
+
+    ir_builder->CreateCall(gfortran_rt.stop_int, std::vector<llvm::Value*>(1, v));
+}
+
 void FortranLLVM::visit(const Nodecl::ObjectInit& node)
 {
     
@@ -1995,6 +2006,7 @@ void FortranLLVM::initialize_llvm_types()
   IOPARM (dt,      sign,		1 << 24, char1) \
  IOPARM_END(dt)
 
+// TODO - Make this a lazy mechanism so we create only what is needed
 void FortranLLVM::initialize_gfortran_runtime()
 {
     typedef std::vector<llvm::Type *> TL;
@@ -2124,6 +2136,14 @@ void FortranLLVM::initialize_gfortran_runtime()
                                 /* isVarArg */ false),
         llvm::GlobalValue::ExternalLinkage,
         "_gfortran_set_options",
+        current_module.get());
+
+    this->gfortran_rt.stop_int = llvm::Function::Create(
+        llvm::FunctionType::get(llvm_types.void_,
+                                { llvm_types.i32 },
+                                /* isVarArg */ false),
+        llvm::GlobalValue::ExternalLinkage,
+        "_gfortran_stop_numeric_f08",
         current_module.get());
 }
 

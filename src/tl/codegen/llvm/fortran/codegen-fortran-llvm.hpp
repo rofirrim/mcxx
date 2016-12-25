@@ -57,6 +57,7 @@ namespace Codegen
         void visit(const Nodecl::CompoundStatement &node);
         void visit(const Nodecl::ExpressionStatement &node);
         void visit(const Nodecl::EmptyStatement &node);
+        void visit(const Nodecl::FortranStopStatement &node);
         void visit(const Nodecl::ObjectInit &node);
         void visit(const Nodecl::IfElseStatement& node);
         void visit(const Nodecl::ForStatement& node);
@@ -111,6 +112,8 @@ namespace Codegen
 
             llvm::Function *set_args;
             llvm::Function *set_options;
+
+            llvm::Function *stop_int;
         } gfortran_rt;
 
         struct LLVMTypes
