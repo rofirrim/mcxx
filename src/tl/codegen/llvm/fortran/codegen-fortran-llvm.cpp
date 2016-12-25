@@ -764,12 +764,12 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
         value = llvm_visitor->eval_expression(rhs);
 
-        // select x, 1, 0
+        // select x, 0, 1
         value = llvm_visitor->ir_builder->CreateSelect(
             llvm_visitor->ir_builder->CreateZExtOrTrunc(
                 value, llvm_visitor->llvm_types.i1),
-            llvm_visitor->get_integer_value(1, rhs_type),
-            llvm_visitor->get_integer_value(0, rhs_type));
+            llvm_visitor->get_integer_value(0, rhs_type),
+            llvm_visitor->get_integer_value(1, rhs_type));
     }
 
     template <typename CreateSInt, typename CreateFloat>
