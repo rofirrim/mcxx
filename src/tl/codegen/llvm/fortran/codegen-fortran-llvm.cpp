@@ -22,6 +22,9 @@
   Cambridge, MA 02139, USA.
 --------------------------------------------------------------------*/
 
+#include "config.h"
+#include "filename.h"
+#include "cxx-driver-build-info.h"
 #include "codegen-fortran-llvm.hpp"
 #include "tl-compilerphase.hpp"
 #include "fortran03-buildscope.h"
@@ -106,6 +109,10 @@ void FortranLLVM::visit(const Nodecl::TopLevel &node)
         TL::CompilationProcess::get_current_file().get_filename(),
         llvm_context);
 
+    // This is required so LLVM does not drop debug info.
+    current_module->addModuleFlag(llvm::Module::Warning, "Debug Info Version",
+                              llvm::DEBUG_METADATA_VERSION);
+
     std::string default_triple = llvm::sys::getDefaultTargetTriple();
     std::string error_message;
     const llvm::Target *target = llvm::TargetRegistry::lookupTarget(default_triple, error_message);
@@ -125,9 +132,27 @@ void FortranLLVM::visit(const Nodecl::TopLevel &node)
     ir_builder = std::unique_ptr<llvm::IRBuilder<> >(
         new llvm::IRBuilder<>(llvm_context));
 
+    dbg_builder = std::unique_ptr<llvm::DIBuilder>(
+        new llvm::DIBuilder(*current_module));
+
+    std::string base = give_basename(node.get_filename().c_str());
+    std::string dir = give_dirname(node.get_filename().c_str());
+    dbg_info.file = dbg_builder->createFile(base, dir);
+    llvm::DICompileUnit *dbg_compile_unit = dbg_builder->createCompileUnit(llvm::dwarf::DW_LANG_Fortran95,
+        dbg_info.file,
+        PACKAGE " " VERSION " (" MCXX_BUILD_VERSION ")",
+        /* isOptimized */ false,
+        /* Flags */ "",
+        /* RuntimeVersion */ 0);
+
     initialize_llvm_context();
 
+    push_debug_scope(dbg_compile_unit);
     walk(node.get_top_level());
+    pop_debug_scope();
+    ERROR_CONDITION(!dbg_info.stack_debug_scope.empty(), "Stack of debug scopes is not empty", 0);
+
+    dbg_builder->finalize();
 
     llvm::raw_os_ostream ros(*file);
     current_module->print(ros,
@@ -142,27 +167,46 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
     // Create a function with the proper type
     TL::Symbol sym = node.get_symbol();
 
-    llvm::Type *function_type = nullptr;
-
+    TL::Type function_type;
     std::string mangled_name;
     if (sym.is_fortran_main_program())
     {
         mangled_name = "MAIN__";
-        function_type = llvm::FunctionType::get(
-            llvm_types.void_, {}, /* isVarArg */ false);
+        function_type = TL::Type::get_void_type().get_function_returning(
+                TL::ObjectList<TL::Type>());
     }
     else
     {
         mangled_name = fortran_mangle_symbol(sym.get_internal_symbol());
-        function_type = get_llvm_type(sym.get_type());
+        function_type = sym.get_type();
     }
+    llvm::Type *llvm_function_type = get_llvm_type(function_type);
 
     llvm::Constant *c = current_module->getOrInsertFunction(
         mangled_name,
-        llvm::cast<llvm::FunctionType>(function_type),
+        llvm::cast<llvm::FunctionType>(llvm_function_type),
         /* no attributes so far */ llvm::AttributeSet());
 
     llvm::Function *fun = llvm::cast<llvm::Function>(c);
+
+    llvm::DISubroutineType* dbg_type = llvm::cast<llvm::DISubroutineType>(get_debug_info_type(function_type));
+    llvm::DISubprogram* dbg_subprogram = dbg_builder->createFunction(
+        get_debug_scope(),
+        sym.get_name(),
+        mangled_name,
+        dbg_info.file,
+        sym.get_line(),
+        dbg_type,
+        /* isLocalToUnit */ false,
+        /* isDefinition */ true,
+        /* ScopeLine */ sym.get_line());
+    fun->setSubprogram(dbg_subprogram);
+
+    push_debug_scope(dbg_subprogram);
+
+    // Do not place this earlier because we need to make sure that a
+    // DILocalScope is in the scope stack before we use this.
+    FortranLLVM::TrackLocation loc(this, node);
 
     // Set argument names
     TL::ObjectList<TL::Symbol> related_symbols = sym.get_related_symbols();
@@ -173,7 +217,14 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
     llvm::Function::ArgumentListType::iterator llvm_fun_args_it
         = llvm_fun_args.begin();
 
+    // We need to handle this context here due to debug info of parameters
+    Nodecl::Context context = node.get_statements().as<Nodecl::Context>();
+    llvm::DILexicalBlock *lexical_block = dbg_builder->createLexicalBlock(get_debug_scope(), dbg_info.file,
+            context.get_line(), context.get_column());
+    push_debug_scope(lexical_block);
+
     clear_mappings();
+    int dbg_argno = 1;
     while (related_symbols_it != related_symbols.end()
            && llvm_fun_args_it != llvm_fun_args.end())
     {
@@ -182,6 +233,14 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
 
         v.setName(s.get_name());
         map_symbol_to_value(s, &v);
+
+        dbg_builder->createParameterVariable(get_debug_scope(),
+            s.get_name(),
+            dbg_argno,
+            dbg_info.file,
+            sym.get_line(),
+            get_debug_info_type(sym.get_type()));
+        dbg_argno++;
 
         related_symbols_it++;
         llvm_fun_args_it++;
@@ -197,7 +256,9 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
     set_current_block(entry_basic_block);
     push_allocating_block(entry_basic_block);
 
-    walk(node.get_statements());
+    walk(context.get_in_context());
+    pop_debug_scope(); // top level lexical scope
+    pop_debug_scope(); // subroutine
 
     if (sym.is_fortran_main_program()
             || sym.get_type().returns().is_void())
@@ -227,16 +288,27 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
 
 void FortranLLVM::visit(const Nodecl::Context &node)
 {
+    FortranLLVM::TrackLocation loc(this, node);
+
+    // This node does not usually appear in Fortran except in the top level of
+    // a FunctionCode or if using BLOCK .. END BLOCK. For the FunctionCode case, we handle it
+    // in the visitor of FunctionCode so this code will never be run by that case.
+    llvm::DILexicalBlock *lexical_block = dbg_builder->createLexicalBlock(get_debug_scope(), dbg_info.file,
+            node.get_line(), node.get_column());
+    push_debug_scope(lexical_block);
     walk(node.get_in_context());
+    pop_debug_scope();
 }
 
 void FortranLLVM::visit(const Nodecl::CompoundStatement &node)
 {
+    FortranLLVM::TrackLocation loc(this, node);
     walk(node.get_statements());
 }
 
 void FortranLLVM::visit(const Nodecl::ExpressionStatement &node)
 {
+    FortranLLVM::TrackLocation loc(this, node);
     eval_expression(node.get_nest());
 }
 
@@ -405,6 +477,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
     void visit(const Nodecl::Symbol &node)
     {
+        FortranLLVM::TrackLocation loc(llvm_visitor, node);
+
         llvm_visitor->emit_variable(node.get_symbol());
         value = llvm_visitor->get_value(node.get_symbol());
     }
@@ -482,6 +556,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
     void visit(const Nodecl::Conversion& node)
     {
+        FortranLLVM::TrackLocation loc(llvm_visitor, node);
+
         TL::Type dest = node.get_type();
         TL::Type orig = node.get_nest().get_type();
 
@@ -603,6 +679,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
     void visit(const Nodecl::Assignment& node)
     {
+        FortranLLVM::TrackLocation loc(llvm_visitor, node);
+
         llvm::Value *vlhs = llvm_visitor->eval_expression(node.get_lhs());
         llvm::Value *vrhs = llvm_visitor->eval_expression(node.get_rhs());
 
@@ -652,8 +730,9 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     // void visit(const Nodecl::StructuredValue& node);
     void visit(const Nodecl::BooleanLiteral& node)
     {
-        const_value_t *val = node.get_constant();
+        FortranLLVM::TrackLocation loc(llvm_visitor, node);
 
+        const_value_t *val = node.get_constant();
         if (const_value_is_zero(val))
         {
             value = llvm_visitor->get_integer_value(0, node.get_type());
@@ -673,6 +752,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
     void visit(const Nodecl::Neg &node)
     {
+        FortranLLVM::TrackLocation loc(llvm_visitor, node);
+
         Nodecl::NodeclBase rhs = node.get_rhs();
         llvm::Value *vrhs = llvm_visitor->eval_expression(rhs);
 
@@ -705,9 +786,13 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
     void visit(const Nodecl::LogicalAnd& node)
     {
+        FortranLLVM::TrackLocation loc(llvm_visitor, node);
+
         Nodecl::NodeclBase lhs = node.get_lhs();
         Nodecl::NodeclBase rhs = node.get_rhs();
+
         llvm::Value *vlhs = llvm_visitor->eval_expression(lhs);
+
         llvm::BasicBlock *block_eval_lhs = llvm_visitor->get_current_block();
 
         llvm::Value *vcond = llvm_visitor->ir_builder->CreateZExtOrTrunc(
@@ -721,6 +806,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
         llvm_visitor->set_current_block(block_eval_rhs);
         llvm::Value *vrhs = llvm_visitor->eval_expression(rhs);
+
         llvm_visitor->ir_builder->CreateBr(block_end);
 
         llvm_visitor->set_current_block(block_end);
@@ -732,6 +818,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
     void visit(const Nodecl::LogicalOr& node)
     {
+        FortranLLVM::TrackLocation loc(llvm_visitor, node);
+
         Nodecl::NodeclBase lhs = node.get_lhs();
         Nodecl::NodeclBase rhs = node.get_rhs();
         llvm::BasicBlock *block_eval_lhs = llvm_visitor->get_current_block();
@@ -748,6 +836,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
         llvm_visitor->set_current_block(block_eval_rhs);
         llvm::Value *vrhs = llvm_visitor->eval_expression(rhs);
+
         llvm_visitor->ir_builder->CreateBr(block_end);
 
         llvm_visitor->set_current_block(block_end);
@@ -759,6 +848,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
     void visit(const Nodecl::LogicalNot& node)
     {
+        FortranLLVM::TrackLocation loc(llvm_visitor, node);
+
         Nodecl::NodeclBase rhs = node.get_rhs();
         TL::Type rhs_type = rhs.get_type();
 
@@ -1130,6 +1221,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                                CreateSInt create_sint,
                                CreateFloat create_float)
     {
+        FortranLLVM::TrackLocation loc(llvm_visitor, node);
+
         Nodecl::NodeclBase lhs = node.get_lhs();
         Nodecl::NodeclBase rhs = node.get_rhs();
 
@@ -1278,6 +1371,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
     void visit(const Nodecl::IntegerLiteral &node)
     {
+        FortranLLVM::TrackLocation loc(llvm_visitor, node);
+
         value = llvm_visitor->get_integer_value(
             // FIXME: INTEGER(16)
             const_value_cast_to_8(node.get_constant()),
@@ -1286,6 +1381,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
     void visit(const Nodecl::FloatingLiteral& node)
     {
+        FortranLLVM::TrackLocation loc(llvm_visitor, node);
+
         TL::Type t = node.get_type();
         if (t.is_float())
         {
@@ -1309,6 +1406,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     // void visit(const Nodecl::Reference& node);
     void visit(const Nodecl::ParenthesizedExpression& node)
     {
+        FortranLLVM::TrackLocation loc(llvm_visitor, node);
+
         // FIXME: Technically Fortran says that the operands are to be
         // evaluated in the program order if they are inside a parenthesis. For
         // now I do not know how to force such a thing in LLVM, so temporarily
@@ -1715,6 +1814,88 @@ llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
     }
 }
 
+llvm::DIType *FortranLLVM::get_debug_info_type(TL::Type t)
+{
+    if (t.is_lvalue_reference())
+    {
+        return dbg_builder->createReferenceType(0, get_debug_info_type(t.references_to()));
+    }
+    // else if (t.is_pointer())
+    // {
+    //     return PointerType::get(
+    //             get_debug_info_type(t.points_to()),
+    //             /* AddressSpace */ 0);
+    // }
+    else if (t.is_function())
+    {
+        TL::ObjectList<TL::Type> params = t.parameters();
+        std::vector<llvm::Metadata *> dbg_param_types;
+        dbg_param_types.reserve(params.size() + 1);
+
+        dbg_param_types.push_back(get_debug_info_type(t.returns()));
+        for (TL::Type t : params)
+        {
+            dbg_param_types.push_back(get_debug_info_type(t));
+        }
+        return dbg_builder->createSubroutineType(dbg_builder->getOrCreateTypeArray(dbg_param_types));
+    }
+    else if (t.is_bool())
+    {
+        std::stringstream ss;
+        ss << "LOGICAL(KIND=" << t.get_size() << ")";
+        return dbg_builder->createBasicType(ss.str(), t.get_size() * 8, llvm::dwarf::DW_ATE_boolean);
+    }
+    else if (t.is_signed_integral())
+    {
+        std::stringstream ss;
+        ss << "INTEGER(KIND=" << t.get_size() << ")";
+        return dbg_builder->createBasicType(ss.str(), t.get_size() * 8, llvm::dwarf::DW_ATE_signed);
+    }
+    else if (t.is_float())
+    {
+        return dbg_builder->createBasicType("REAL(KIND=4)", 32, llvm::dwarf::DW_ATE_float);
+    }
+    else if (t.is_double())
+    {
+        return dbg_builder->createBasicType("REAL(KIND=8)", 64, llvm::dwarf::DW_ATE_float);
+    }
+    else if (t.is_void())
+    {
+        return dbg_builder->createUnspecifiedType("void");
+    }
+    else if (t.is_array()
+            && !t.array_requires_descriptor())
+    {
+        // Statically sized arrays or VLAs
+        Nodecl::NodeclBase size = t.array_get_size();
+        ERROR_CONDITION(!size.is_constant(), "Invalid size", 0);
+
+        std::vector<llvm::Metadata*> subscripts;
+        TL::Type current_type = t;
+        while (t.is_array())
+        {
+            Nodecl::NodeclBase lower, upper;
+            t.array_get_bounds(lower, upper);
+
+            subscripts.push_back(dbg_builder->getOrCreateSubrange(
+                lower.is_constant() ? const_value_cast_to_8(lower.get_constant()) : 0, 
+                upper.is_constant() ? const_value_cast_to_8(upper.get_constant()) : 0));
+        }
+
+        llvm::DINodeArray array = dbg_builder->getOrCreateArray(subscripts);
+        return dbg_builder->createArrayType(
+                const_value_cast_to_8(size.get_constant()),
+                t.array_base_element().get_alignment_of(),
+                get_debug_info_type(t.array_base_element()),
+                array);
+    }
+    else
+    {
+        internal_error("Cannot synthesize Debug Info type for type '%s'",
+                       print_declarator(t.get_internal_type()));
+    }
+}
+
 llvm::Value* FortranLLVM::evaluate_size_of_dimension(TL::Type t)
 {
     ERROR_CONDITION(!t.is_array(), "Invalid type", 0);
@@ -1855,10 +2036,15 @@ void FortranLLVM::emit_variable(TL::Symbol sym)
     llvm::Value *allocation = create_alloca(
         get_llvm_type(sym.get_type()), array_size, sym.get_name());
     map_symbol_to_value(sym, allocation);
+
+    dbg_builder->createAutoVariable(get_debug_scope(), sym.get_name(), dbg_info.file,
+        sym.get_line(), get_debug_info_type(sym.get_type()));
 }
 
 void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
 {
+    FortranLLVM::TrackLocation loc(this, node);
+
     // TODO: Implement something fancier than list formating
     Nodecl::NodeclBase fmt = node.get_format();
     ERROR_CONDITION(!fmt.is<Nodecl::Text>()

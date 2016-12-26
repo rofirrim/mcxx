@@ -33,6 +33,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/DIBuilder.h"
 
 #include <map>
 
@@ -69,6 +70,7 @@ namespace Codegen
         llvm::LLVMContext llvm_context;
         std::unique_ptr<llvm::Module> current_module;
         std::unique_ptr<llvm::IRBuilder<> > ir_builder;
+        std::unique_ptr<llvm::DIBuilder > dbg_builder;
 
         struct FunctionInfo
         {
@@ -135,12 +137,55 @@ namespace Codegen
 
         std::map<llvm::Type*, FieldMap> fields;
 
+        struct DebugInfo
+        {
+            llvm::DIFile* file;
+            std::vector<llvm::DIScope *> stack_debug_scope;
+        } dbg_info;
+
       private:
         void initialize_llvm_context();
         void initialize_llvm_types();
         void initialize_gfortran_runtime();
 
+        // Debug info
+        void push_debug_scope(llvm::DIScope *dbg_scope)
+        {
+            dbg_info.stack_debug_scope.push_back(dbg_scope);
+        }
+        void pop_debug_scope()
+        {
+            ERROR_CONDITION(dbg_info.stack_debug_scope.empty(), "Stack of debug scopes is empty", 0);
+            dbg_info.stack_debug_scope.pop_back();
+        }
+        llvm::DIScope *get_debug_scope()
+        {
+            ERROR_CONDITION(dbg_info.stack_debug_scope.empty(), "Stack of debug scopes is empty", 0);
+            return dbg_info.stack_debug_scope.back();
+        }
+
         llvm::Type *get_llvm_type(TL::Type t);
+        llvm::DIType *get_debug_info_type(TL::Type t);
+
+        struct TrackLocation
+        {
+            private:
+                FortranLLVM *visitor;
+                llvm::DebugLoc old_debug_loc;
+            public:
+                TrackLocation(FortranLLVM* v, Nodecl::NodeclBase n)
+                    : visitor(v), old_debug_loc(visitor->ir_builder->getCurrentDebugLocation())
+                {
+                    ERROR_CONDITION(!llvm::isa<llvm::DILocalScope>(v->get_debug_scope()), "Invalid scope for location", 0);
+                    visitor->ir_builder->SetCurrentDebugLocation(
+                            llvm::DILocation::get(visitor->llvm_context, n.get_line(), n.get_column(), v->get_debug_scope()));
+                }
+
+                ~TrackLocation()
+                {
+                    visitor->ir_builder->SetCurrentDebugLocation(old_debug_loc);
+                }
+        };
 
         // Evaluates a Fortran expression
         llvm::Value *eval_expression(Nodecl::NodeclBase n);
