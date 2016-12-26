@@ -758,6 +758,11 @@ namespace TL
         return locus_get_line(_symbol->locus);
     }
 
+    unsigned int Symbol::get_column() const
+    {
+        return locus_get_column(_symbol->locus);
+    }
+
     bool Symbol::is_fortran_common() const
     {
         return _symbol->kind == SK_COMMON;

@@ -138,6 +138,9 @@ namespace TL
             //! Returns the line where the symbol was declared
             unsigned int get_line() const;
 
+            //! Returns the column where the symbol was declared
+            unsigned int get_column() const;
+
             virtual ~Symbol()
             {
             }
