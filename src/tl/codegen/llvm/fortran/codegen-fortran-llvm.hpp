@@ -173,12 +173,20 @@ namespace Codegen
                 FortranLLVM *visitor;
                 llvm::DebugLoc old_debug_loc;
             public:
-                TrackLocation(FortranLLVM* v, Nodecl::NodeclBase n)
+                TrackLocation(FortranLLVM* v, const locus_t* locus)
                     : visitor(v), old_debug_loc(visitor->ir_builder->getCurrentDebugLocation())
                 {
                     ERROR_CONDITION(!llvm::isa<llvm::DILocalScope>(v->get_debug_scope()), "Invalid scope for location", 0);
                     visitor->ir_builder->SetCurrentDebugLocation(
-                            llvm::DILocation::get(visitor->llvm_context, n.get_line(), n.get_column(), v->get_debug_scope()));
+                            llvm::DILocation::get(visitor->llvm_context,
+                                locus_get_line(locus),
+                                locus_get_column(locus),
+                                v->get_debug_scope()));
+                }
+
+                TrackLocation(FortranLLVM* v, Nodecl::NodeclBase n)
+                    : TrackLocation(v, n.get_locus())
+                {
                 }
 
                 ~TrackLocation()

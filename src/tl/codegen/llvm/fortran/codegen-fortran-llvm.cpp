@@ -189,6 +189,7 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
 
     llvm::Function *fun = llvm::cast<llvm::Function>(c);
 
+    llvm::DINode::DIFlags flags = llvm::DINode::FlagPrototyped;
     llvm::DISubroutineType* dbg_type = llvm::cast<llvm::DISubroutineType>(get_debug_info_type(function_type));
     llvm::DISubprogram* dbg_subprogram = dbg_builder->createFunction(
         get_debug_scope(),
@@ -199,14 +200,11 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
         dbg_type,
         /* isLocalToUnit */ false,
         /* isDefinition */ true,
-        /* ScopeLine */ sym.get_line());
+        /* ScopeLine */ sym.get_line(),
+        flags);
     fun->setSubprogram(dbg_subprogram);
 
     push_debug_scope(dbg_subprogram);
-
-    // Do not place this earlier because we need to make sure that a
-    // DILocalScope is in the scope stack before we use this.
-    FortranLLVM::TrackLocation loc(this, node);
 
     // Set argument names
     TL::ObjectList<TL::Symbol> related_symbols = sym.get_related_symbols();
@@ -223,6 +221,18 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
             context.get_line(), context.get_column());
     push_debug_scope(lexical_block);
 
+    // Do not place this earlier because we need to make sure that a
+    // DILocalScope is in the scope stack before we use this.
+    FortranLLVM::TrackLocation loc(this, node);
+
+    // Create entry block
+    set_current_function(fun);
+    llvm::BasicBlock *entry_basic_block
+        = llvm::BasicBlock::Create(llvm_context, "entry", fun);
+    set_current_block(entry_basic_block);
+    push_allocating_block(entry_basic_block);
+
+    // Register parameters
     clear_mappings();
     int dbg_argno = 1;
     while (related_symbols_it != related_symbols.end()
@@ -234,12 +244,25 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
         v.setName(s.get_name());
         map_symbol_to_value(s, &v);
 
-        dbg_builder->createParameterVariable(get_debug_scope(),
-            s.get_name(),
-            dbg_argno,
-            dbg_info.file,
-            sym.get_line(),
-            get_debug_info_type(sym.get_type()));
+        std::vector<int64_t> dbg_expr_ops;
+        llvm::DIExpression *dbg_expr = dbg_builder->createExpression(dbg_expr_ops);
+
+        llvm::DILocalVariable *dbg_param =
+            dbg_builder->createParameterVariable(get_debug_scope(),
+                    s.get_name(),
+                    dbg_argno,
+                    dbg_info.file,
+                    s.get_line(),
+                    get_debug_info_type(s.get_type()));
+        dbg_builder->insertDeclare(&v,
+                dbg_param,
+                dbg_expr,
+                llvm::DILocation::get(llvm_context,
+                    s.get_line(),
+                    s.get_column(),
+                    get_debug_scope()),
+                ir_builder->GetInsertBlock());
+                
         dbg_argno++;
 
         related_symbols_it++;
@@ -250,15 +273,8 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
                     "Mismatch between TL and llvm::Arguments",
                     0);
 
-    set_current_function(fun);
-    llvm::BasicBlock *entry_basic_block
-        = llvm::BasicBlock::Create(llvm_context, "entry", fun);
-    set_current_block(entry_basic_block);
-    push_allocating_block(entry_basic_block);
 
     walk(context.get_in_context());
-    pop_debug_scope(); // top level lexical scope
-    pop_debug_scope(); // subroutine
 
     if (sym.is_fortran_main_program()
             || sym.get_type().returns().is_void())
@@ -276,6 +292,9 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
         llvm::Value* value_ret_val = ir_builder->CreateLoad(addr_ret_val);
         ir_builder->CreateRet(value_ret_val);
     }
+
+    pop_debug_scope(); // top level lexical scope
+    pop_debug_scope(); // subroutine
 
     pop_allocating_block();
     clear_current_function();
@@ -1818,7 +1837,8 @@ llvm::DIType *FortranLLVM::get_debug_info_type(TL::Type t)
 {
     if (t.is_lvalue_reference())
     {
-        return dbg_builder->createReferenceType(0, get_debug_info_type(t.references_to()));
+        return dbg_builder->createReferenceType(llvm::dwarf::DW_TAG_reference_type,
+                get_debug_info_type(t.references_to()));
     }
     // else if (t.is_pointer())
     // {
@@ -1868,25 +1888,26 @@ llvm::DIType *FortranLLVM::get_debug_info_type(TL::Type t)
     {
         // Statically sized arrays or VLAs
         Nodecl::NodeclBase size = t.array_get_size();
-        ERROR_CONDITION(!size.is_constant(), "Invalid size", 0);
 
         std::vector<llvm::Metadata*> subscripts;
         TL::Type current_type = t;
-        while (t.is_array())
+        while (current_type.is_array())
         {
             Nodecl::NodeclBase lower, upper;
-            t.array_get_bounds(lower, upper);
+            current_type.array_get_bounds(lower, upper);
 
             subscripts.push_back(dbg_builder->getOrCreateSubrange(
                 lower.is_constant() ? const_value_cast_to_8(lower.get_constant()) : 0, 
                 upper.is_constant() ? const_value_cast_to_8(upper.get_constant()) : 0));
+
+            current_type = current_type.array_element();
         }
 
         llvm::DINodeArray array = dbg_builder->getOrCreateArray(subscripts);
         return dbg_builder->createArrayType(
-                const_value_cast_to_8(size.get_constant()),
-                t.array_base_element().get_alignment_of(),
-                get_debug_info_type(t.array_base_element()),
+                size.is_constant() ? const_value_cast_to_8(size.get_constant()) : 0,
+                current_type.array_base_element().get_alignment_of(),
+                get_debug_info_type(current_type.array_base_element()),
                 array);
     }
     else
@@ -2018,6 +2039,7 @@ void FortranLLVM::emit_variable(TL::Symbol sym)
     {
         // Emit size
         llvm::IRBuilderBase::InsertPoint previous_ip = change_to_allocating_block();
+        TrackLocation loc(this, sym.get_locus());
 
         bool block_was_terminated = get_current_block()->getTerminator() != nullptr;
 
@@ -2037,8 +2059,26 @@ void FortranLLVM::emit_variable(TL::Symbol sym)
         get_llvm_type(sym.get_type()), array_size, sym.get_name());
     map_symbol_to_value(sym, allocation);
 
-    dbg_builder->createAutoVariable(get_debug_scope(), sym.get_name(), dbg_info.file,
-        sym.get_line(), get_debug_info_type(sym.get_type()));
+    llvm::DINode::DIFlags flags = llvm::DINode::FlagZero;
+    if (sym.is_saved_expression())
+        flags |= llvm::DINode::FlagArtificial;
+    llvm::DILocalVariable *dbg_var =
+        dbg_builder->createAutoVariable(get_debug_scope(), sym.get_name(), dbg_info.file,
+                sym.get_line(), get_debug_info_type(sym.get_type()),
+                /* AlwaysPreserve */ false,
+                flags);
+
+    std::vector<int64_t> dbg_expr_ops;
+    llvm::DIExpression *dbg_expr = dbg_builder->createExpression(dbg_expr_ops);
+
+    dbg_builder->insertDeclare(allocation,
+            dbg_var,
+            dbg_expr,
+            llvm::DILocation::get(llvm_context,
+                sym.get_line(),
+                sym.get_column(),
+                get_debug_scope()),
+            ir_builder->GetInsertBlock());
 }
 
 void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
