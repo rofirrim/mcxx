@@ -109,11 +109,10 @@ void FortranLLVM::visit(const Nodecl::TopLevel &node)
         TL::CompilationProcess::get_current_file().get_filename(),
         llvm_context);
 
-    // This is required so LLVM does not drop debug info.
+    current_module->addModuleFlag(llvm::Module::Error, "PIC Level", 2);
     current_module->addModuleFlag(llvm::Module::Warning, "Debug Info Version",
                               llvm::DEBUG_METADATA_VERSION);
-    current_module->addModuleFlag(llvm::Module::Warning, "Dwarf Version",
-                              4);
+    current_module->addModuleFlag(llvm::Module::Warning, "Dwarf Version", 4);
 
     std::string default_triple = llvm::sys::getDefaultTargetTriple();
     std::string error_message;
@@ -149,7 +148,7 @@ void FortranLLVM::visit(const Nodecl::TopLevel &node)
 
     initialize_llvm_context();
 
-    push_debug_scope(dbg_compile_unit);
+    push_debug_scope(dbg_info.file);
     walk(node.get_top_level());
     pop_debug_scope();
     ERROR_CONDITION(!dbg_info.stack_debug_scope.empty(), "Stack of debug scopes is not empty", 0);
@@ -171,23 +170,43 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
 
     TL::Type function_type;
     std::string mangled_name;
+
+    llvm::AttributeSet attributes;
+
     if (sym.is_fortran_main_program())
     {
         mangled_name = "MAIN__";
         function_type = TL::Type::get_void_type().get_function_returning(
                 TL::ObjectList<TL::Type>());
+        attributes = attributes.addAttribute(llvm_context,
+                llvm::AttributeSet::FunctionIndex,
+                llvm::Attribute::NoRecurse);
     }
     else
     {
         mangled_name = fortran_mangle_symbol(sym.get_internal_symbol());
         function_type = sym.get_type();
     }
+
+    attributes = attributes.addAttribute(llvm_context,
+            llvm::AttributeSet::FunctionIndex,
+            llvm::Attribute::UWTable);
+    attributes = attributes.addAttribute(llvm_context,
+            llvm::AttributeSet::FunctionIndex,
+            llvm::Attribute::NoUnwind);
+    attributes = attributes.addAttribute(llvm_context,
+            llvm::AttributeSet::FunctionIndex,
+            "no-frame-pointer-elim", "true");
+    attributes = attributes.addAttribute(llvm_context,
+            llvm::AttributeSet::FunctionIndex,
+            "no-frame-pointer-elim-non-leaf");
+
     llvm::Type *llvm_function_type = get_llvm_type(function_type);
 
     llvm::Constant *c = current_module->getOrInsertFunction(
         mangled_name,
         llvm::cast<llvm::FunctionType>(llvm_function_type),
-        /* no attributes so far */ llvm::AttributeSet());
+        attributes);
 
     llvm::Function *fun = llvm::cast<llvm::Function>(c);
 
@@ -219,11 +238,9 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
     llvm::Function::ArgumentListType::iterator llvm_fun_args_it
         = llvm_fun_args.begin();
 
-    // We need to handle this context here due to debug info of parameters
+    // We need to handle this context here due to debug info of parameters.
+    // A lexical scope should not be created for top level variables.
     Nodecl::Context context = node.get_statements().as<Nodecl::Context>();
-    llvm::DILexicalBlock *lexical_block = dbg_builder->createLexicalBlock(get_debug_scope(), dbg_info.file,
-            context.get_line(), context.get_column());
-    push_debug_scope(lexical_block);
 
     // Do not place this earlier because we need to make sure that a
     // DILocalScope is in the scope stack before we use this.
@@ -252,6 +269,18 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
             // Emit a temporary storage for it
             v->setName(s.get_name() + ".value");
             v = make_temporary(v);
+        }
+        else if (!s.is_optional())
+        {
+            // We allow OPTIONAL be NULL (I think implementing OPTIONAL this way violates the standard)
+            llvm::AttributeSet attrs = fun->getAttributes();
+            attrs = attrs.addAttribute(llvm_context, dbg_argno, llvm::Attribute::NonNull);
+            if (!s.get_type().no_ref().is_array())
+                attrs = attrs.addAttribute(llvm_context, {(unsigned)dbg_argno},
+                        llvm::Attribute::get(llvm_context,
+                            llvm::Attribute::Dereferenceable, 
+                            s.get_type().no_ref().get_size()));
+            fun->setAttributes(attrs);
         }
 
         v->setName(s.get_name());
@@ -306,7 +335,6 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
         ir_builder->CreateRet(value_ret_val);
     }
 
-    pop_debug_scope(); // top level lexical scope
     pop_debug_scope(); // subroutine
 
     pop_allocating_block();
@@ -1851,7 +1879,8 @@ llvm::DIType *FortranLLVM::get_debug_info_type(TL::Type t)
     if (t.is_lvalue_reference())
     {
         return dbg_builder->createReferenceType(llvm::dwarf::DW_TAG_reference_type,
-                get_debug_info_type(t.references_to()));
+                get_debug_info_type(t.references_to()),
+                /* FIXME */ 8 * TL::Type::get_void_type().get_pointer_to().get_size());
     }
     // else if (t.is_pointer())
     // {
@@ -2412,14 +2441,24 @@ void FortranLLVM::emit_main(llvm::Function *fortran_program)
         llvm::GlobalValue::PrivateLinkage,
         llvm::ConstantArray::get(options_type, options_values));
 
+    llvm::AttributeSet attributes;
+    attributes = attributes.addAttribute(llvm_context,
+            llvm::AttributeSet::FunctionIndex,
+            llvm::Attribute::NoRecurse);
+    attributes = attributes.addAttribute(llvm_context,
+            llvm::AttributeSet::FunctionIndex,
+            llvm::Attribute::UWTable);
+    attributes = attributes.addAttribute(llvm_context,
+            llvm::AttributeSet::FunctionIndex,
+            llvm::Attribute::NoUnwind);
     llvm::Constant *c = current_module->getOrInsertFunction(
-        "main",
-        llvm::FunctionType::get(
-            llvm_types.i32,
-            { llvm_types.i32,
-              llvm_types.ptr_i8->getPointerTo() },
-            /* isVarArg */ false),
-        /* no attributes so far */ llvm::AttributeSet());
+            "main",
+            llvm::FunctionType::get(
+                llvm_types.i32,
+                { llvm_types.i32,
+                llvm_types.ptr_i8->getPointerTo() },
+                /* isVarArg */ false),
+            attributes);
 
     llvm::Function *fun = llvm::cast<llvm::Function>(c);
 
