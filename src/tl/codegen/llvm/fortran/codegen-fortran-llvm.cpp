@@ -194,12 +194,12 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
     attributes = attributes.addAttribute(llvm_context,
             llvm::AttributeSet::FunctionIndex,
             llvm::Attribute::NoUnwind);
-    attributes = attributes.addAttribute(llvm_context,
-            llvm::AttributeSet::FunctionIndex,
-            "no-frame-pointer-elim", "true");
-    attributes = attributes.addAttribute(llvm_context,
-            llvm::AttributeSet::FunctionIndex,
-            "no-frame-pointer-elim-non-leaf");
+    // attributes = attributes.addAttribute(llvm_context,
+    //         llvm::AttributeSet::FunctionIndex,
+    //         "no-frame-pointer-elim", "true");
+    // attributes = attributes.addAttribute(llvm_context,
+    //         llvm::AttributeSet::FunctionIndex,
+    //         "no-frame-pointer-elim-non-leaf");
 
     llvm::Type *llvm_function_type = get_llvm_type(function_type);
 
