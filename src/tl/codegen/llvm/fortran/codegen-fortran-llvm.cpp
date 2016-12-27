@@ -112,6 +112,8 @@ void FortranLLVM::visit(const Nodecl::TopLevel &node)
     // This is required so LLVM does not drop debug info.
     current_module->addModuleFlag(llvm::Module::Warning, "Debug Info Version",
                               llvm::DEBUG_METADATA_VERSION);
+    current_module->addModuleFlag(llvm::Module::Warning, "Dwarf Version",
+                              4);
 
     std::string default_triple = llvm::sys::getDefaultTargetTriple();
     std::string error_message;
@@ -190,6 +192,8 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
     llvm::Function *fun = llvm::cast<llvm::Function>(c);
 
     llvm::DINode::DIFlags flags = llvm::DINode::FlagPrototyped;
+    if (sym.is_fortran_main_program())
+        flags |= llvm::DINode::FlagMainSubprogram;
     llvm::DISubroutineType* dbg_type = llvm::cast<llvm::DISubroutineType>(get_debug_info_type(function_type));
     llvm::DISubprogram* dbg_subprogram = dbg_builder->createFunction(
         get_debug_scope(),
