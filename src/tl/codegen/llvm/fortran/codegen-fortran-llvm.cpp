@@ -238,11 +238,20 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
     while (related_symbols_it != related_symbols.end()
            && llvm_fun_args_it != llvm_fun_args.end())
     {
-        llvm::Value &v = *llvm_fun_args_it;
+        llvm::Value *v = &*llvm_fun_args_it;
         TL::Symbol s = *related_symbols_it;
 
-        v.setName(s.get_name());
-        map_symbol_to_value(s, &v);
+        if (!s.get_type().no_ref().is_array()
+                && !s.get_type().is_any_reference())
+        {
+            // VALUE dummy argument
+            // Emit a temporary storage for it
+            v->setName(s.get_name() + ".value");
+            v = make_temporary(v);
+        }
+
+        v->setName(s.get_name());
+        map_symbol_to_value(s, v);
 
         std::vector<int64_t> dbg_expr_ops;
         llvm::DIExpression *dbg_expr = dbg_builder->createExpression(dbg_expr_ops);
@@ -254,7 +263,7 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
                     dbg_info.file,
                     s.get_line(),
                     get_debug_info_type(s.get_type()));
-        dbg_builder->insertDeclare(&v,
+        dbg_builder->insertDeclare(v,
                 dbg_param,
                 dbg_expr,
                 llvm::DILocation::get(llvm_context,
