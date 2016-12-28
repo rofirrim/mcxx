@@ -139,8 +139,18 @@ namespace Codegen
 
         struct DebugInfo
         {
-            llvm::DIFile* file;
+            llvm::DIFile* file = nullptr;
+            llvm::DISubprogram* function = nullptr;
             std::vector<llvm::DIScope *> stack_debug_scope;
+
+            std::map<std::string, llvm::DIModule*> module_map;
+
+            DebugInfo() = default;
+            DebugInfo& operator=(const DebugInfo&) = default;
+
+            void reset() {
+                *this = DebugInfo();
+            }
         } dbg_info;
 
       private:
@@ -166,6 +176,21 @@ namespace Codegen
 
         llvm::Type *get_llvm_type(TL::Type t);
         llvm::DIType *get_debug_info_type(TL::Type t);
+
+        llvm::DIModule *get_module(const std::string& name)
+        {
+            decltype(dbg_info.module_map)::iterator it = dbg_info.module_map.find(name);
+            if (it != dbg_info.module_map.end())
+                return it->second;
+
+            llvm::DIModule *module = dbg_builder->createModule(dbg_info.file,
+                    name,
+                    /* ConfigurationMacros */ llvm::StringRef(),
+                    /* IncludePath */ llvm::StringRef(), // TODO: paths specified in -J ?
+                    /* ISysRoot */ llvm::StringRef());
+            dbg_info.module_map.insert(std::make_pair(name, module));
+            return module;
+        }
 
         struct TrackLocation
         {

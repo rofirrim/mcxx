@@ -138,8 +138,9 @@ void FortranLLVM::visit(const Nodecl::TopLevel &node)
 
     std::string base = give_basename(node.get_filename().c_str());
     std::string dir = give_dirname(node.get_filename().c_str());
+    dbg_info.reset();
     dbg_info.file = dbg_builder->createFile(base, dir);
-    llvm::DICompileUnit *dbg_compile_unit = dbg_builder->createCompileUnit(llvm::dwarf::DW_LANG_Fortran95,
+    /* llvm::DICompileUnit *dbg_compile_unit = */ dbg_builder->createCompileUnit(llvm::dwarf::DW_LANG_Fortran95,
         dbg_info.file,
         PACKAGE " " VERSION " (" MCXX_BUILD_VERSION ")",
         /* isOptimized */ false,
@@ -188,6 +189,12 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
         function_type = sym.get_type();
     }
 
+    if (sym.is_module_procedure())
+    {
+        llvm::DIModule *module = get_module(sym.in_module().get_name());
+        push_debug_scope(module);
+    }
+
     attributes = attributes.addAttribute(llvm_context,
             llvm::AttributeSet::FunctionIndex,
             llvm::Attribute::UWTable);
@@ -226,6 +233,7 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
         /* ScopeLine */ sym.get_line(),
         flags);
     fun->setSubprogram(dbg_subprogram);
+    dbg_info.function = dbg_subprogram;
 
     push_debug_scope(dbg_subprogram);
 
@@ -336,6 +344,12 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
     }
 
     pop_debug_scope(); // subroutine
+    dbg_info.function = nullptr;
+
+    if (sym.is_module_procedure())
+    {
+        pop_debug_scope(); // module
+    }
 
     pop_allocating_block();
     clear_current_function();
@@ -1616,6 +1630,15 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             internal_error(
                 "Calls to unprototyped functions not yet implemented", 0);
 
+        if (called_sym.is_from_module())
+        {
+            TL::Symbol from_module = called_sym.from_module();
+            llvm_visitor->dbg_builder->createImportedModule(
+                llvm_visitor->dbg_info.function,
+                llvm_visitor->get_module(from_module.get_name()),
+                called_sym.get_line());
+        }
+
         std::string mangled_name
             = fortran_mangle_symbol(called_sym.get_internal_symbol());
         llvm::FunctionType *function_type = llvm::cast<llvm::FunctionType>(
@@ -1929,6 +1952,9 @@ llvm::DIType *FortranLLVM::get_debug_info_type(TL::Type t)
             && !t.array_requires_descriptor())
     {
         // Statically sized arrays or VLAs
+        // Unfortunately VLAs have to be represented in a very useless way
+        // since DIBuilder does not seem to support DWARFv4 calculated
+        // subranges yet.
         Nodecl::NodeclBase size = t.array_get_size();
 
         std::vector<llvm::Metadata*> subscripts;
