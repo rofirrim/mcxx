@@ -39,6 +39,30 @@
 
 namespace Codegen
 {
+    template <typename Object>
+    struct LazyObjectPtr
+    {
+        private:
+            Object *obj = nullptr;
+            std::function<Object*()> create;
+        public:
+            template <typename Functor>
+            LazyObjectPtr& operator=(Functor f)
+            {
+                ERROR_CONDITION(obj != nullptr,
+                    "Object has already been constructed", 0);
+                create = f;
+                return *this;
+            }
+
+            Object* get()
+            {
+                if (obj == nullptr)
+                    obj = create();
+                return obj;
+            }
+    };
+
     class FortranLLVM : public CodegenPhase
     {
       public:
@@ -103,19 +127,19 @@ namespace Codegen
         struct GfortranRuntime
         {
             // Input/Output
-            llvm::Type* st_parameter_common;
-            llvm::Type* st_parameter_dt;
+            LazyObjectPtr<llvm::Type> st_parameter_common;
+            LazyObjectPtr<llvm::Type> st_parameter_dt;
 
-            llvm::Function *st_write;
-            llvm::Function *transfer_character_write;
-            llvm::Function *transfer_integer_write;
-            llvm::Function *transfer_real_write;
-            llvm::Function *st_write_done;
+            LazyObjectPtr<llvm::Function> st_write;
+            LazyObjectPtr<llvm::Function> transfer_character_write;
+            LazyObjectPtr<llvm::Function> transfer_integer_write;
+            LazyObjectPtr<llvm::Function> transfer_real_write;
+            LazyObjectPtr<llvm::Function> st_write_done;
 
-            llvm::Function *set_args;
-            llvm::Function *set_options;
+            LazyObjectPtr<llvm::Function> set_args;
+            LazyObjectPtr<llvm::Function> set_options;
 
-            llvm::Function *stop_int;
+            LazyObjectPtr<llvm::Function> stop_int;
         } gfortran_rt;
 
         struct LLVMTypes

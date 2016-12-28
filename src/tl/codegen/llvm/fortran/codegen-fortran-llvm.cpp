@@ -399,7 +399,7 @@ void FortranLLVM::visit(const Nodecl::FortranStopStatement &node)
     llvm::Value *v = eval_expression(expr);
     v = ir_builder->CreateSExtOrTrunc(v, llvm_types.i32);
 
-    ir_builder->CreateCall(gfortran_rt.stop_int, std::vector<llvm::Value*>(1, v));
+    ir_builder->CreateCall(gfortran_rt.stop_int.get(), std::vector<llvm::Value*>(1, v));
 }
 
 void FortranLLVM::visit(const Nodecl::ObjectInit& node)
@@ -2223,7 +2223,7 @@ void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
 
     // Allocate data transfer structure
     llvm::Value *dt_parm
-        = create_alloca(gfortran_rt.st_parameter_dt, nullptr, "dt_parm");
+        = create_alloca(gfortran_rt.st_parameter_dt.get(), nullptr, "dt_parm");
 
     // dt_parm.common.filename = "file";
     // dt_parm.common.line = "file";
@@ -2231,21 +2231,21 @@ void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
     ir_builder->CreateStore(
             ir_builder->CreateGlobalStringPtr(node.get_filename()),
         gep_for_field(
-            gfortran_rt.st_parameter_dt, dt_parm, { "common", "filename" }));
+            gfortran_rt.st_parameter_dt.get(), dt_parm, { "common", "filename" }));
     ir_builder->CreateStore(get_integer_value_32(node.get_line()),
-                            gep_for_field(gfortran_rt.st_parameter_dt,
+                            gep_for_field(gfortran_rt.st_parameter_dt.get(),
                                           dt_parm,
                                           { "common", "line" }));
     ir_builder->CreateStore(get_integer_value_32(128),
-                            gep_for_field(gfortran_rt.st_parameter_dt,
+                            gep_for_field(gfortran_rt.st_parameter_dt.get(),
                                           dt_parm,
                                           { "common", "flags" }));
     ir_builder->CreateStore(get_integer_value_32(6),
-                            gep_for_field(gfortran_rt.st_parameter_dt,
+                            gep_for_field(gfortran_rt.st_parameter_dt.get(),
                                           dt_parm,
                                           { "common", "unit" }));
 
-    ir_builder->CreateCall(gfortran_rt.st_write, { dt_parm });
+    ir_builder->CreateCall(gfortran_rt.st_write.get(), { dt_parm });
 
     Nodecl::List io_items = node.get_io_items().as<Nodecl::List>();
     // FIXME: Refactor
@@ -2256,7 +2256,7 @@ void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
         {
             llvm::Value *expr = eval_expression(n);
 
-            ir_builder->CreateCall(gfortran_rt.transfer_character_write,
+            ir_builder->CreateCall(gfortran_rt.transfer_character_write.get(),
                                    { dt_parm, expr, eval_sizeof(n) });
         }
         else if (t.no_ref().is_signed_integral())
@@ -2265,7 +2265,7 @@ void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
 
             expr = ir_builder->CreatePointerCast(expr, llvm_types.ptr_i8);
 
-            ir_builder->CreateCall(gfortran_rt.transfer_integer_write,
+            ir_builder->CreateCall(gfortran_rt.transfer_integer_write.get(),
                                    { dt_parm, expr, eval_sizeof(n) });
         }
         else if (t.no_ref().is_float()
@@ -2275,7 +2275,7 @@ void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
 
             expr = ir_builder->CreatePointerCast(expr, llvm_types.ptr_i8);
 
-            ir_builder->CreateCall(gfortran_rt.transfer_real_write,
+            ir_builder->CreateCall(gfortran_rt.transfer_real_write.get(),
                                    { dt_parm, expr, eval_sizeof(n) });
         }
         else
@@ -2285,7 +2285,7 @@ void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
         }
     }
 
-    ir_builder->CreateCall(gfortran_rt.st_write_done, { dt_parm });
+    ir_builder->CreateCall(gfortran_rt.st_write_done.get(), { dt_parm });
 }
 
 llvm::Value *FortranLLVM::gep_for_field(
@@ -2361,145 +2361,142 @@ void FortranLLVM::initialize_llvm_types()
   IOPARM (dt,      sign,		1 << 24, char1) \
  IOPARM_END(dt)
 
+
 // TODO - Make this a lazy mechanism so we create only what is needed
 void FortranLLVM::initialize_gfortran_runtime()
 {
     typedef std::vector<llvm::Type *> TL;
-    auto f_ioparm_type_int4 = [&, this](TL &t)
-    {
+    auto add_type_int4 = [=](TL &t) { t.push_back(llvm_types.i32); };
+    auto add_type_intio = [=](TL &t) { add_type_int4(t); };
+    auto add_type_pint4 = [=](TL &t) { t.push_back(llvm_types.ptr_i32); };
+    auto add_type_pchar = [=](TL &t) { t.push_back(llvm_types.ptr_i8); };
+    auto add_type_char1 = [=](TL &t) { 
+        t.push_back(llvm_types.i32); 
+        add_type_pchar(t);
+    };
+    auto add_type_char2 = [=](TL &t) {
+        add_type_pchar(t);
         t.push_back(llvm_types.i32);
     };
-    auto f_ioparm_type_intio = f_ioparm_type_int4;
-    auto f_ioparm_type_pint4 = [&, this](TL &t)
-    {
-        t.push_back(llvm_types.ptr_i32);
-    };
-    auto f_ioparm_type_pchar = [&, this](TL &t)
-    {
-        t.push_back(llvm_types.ptr_i8);
-    };
-    auto f_ioparm_type_char1 = [&, this](TL &t)
-    {
-        t.push_back(llvm_types.i32);
-        f_ioparm_type_pchar(t);
-    };
-    auto f_ioparm_type_char2 = [&, this](TL &t)
-    {
-        f_ioparm_type_pchar(t);
-        t.push_back(llvm_types.i32);
-    };
-    auto f_ioparm_type_pintio = [&, this](TL &t)
-    {
-        t.push_back(llvm_types.i64);
-    };
-    auto f_ioparm_type_parray = f_ioparm_type_pchar;
-    auto f_ioparm_type_pad = [&, this](TL &t)
-    {
+    auto add_type_pintio = [=](TL &t) { t.push_back(llvm_types.i64); };
+    auto add_type_parray = [=](TL &t) { add_type_pchar(t); };
+    auto add_type_pad = [=](TL &t) {
         const llvm::DataLayout &dl = current_module->getDataLayout();
         uint64_t size = 16 * dl.getPointerTypeSize(llvm_types.ptr_i8)
-                        + 32 * dl.getTypeAllocSize(llvm_types.i32);
+            + 32 * dl.getTypeAllocSize(llvm_types.i32);
         t.push_back(llvm::ArrayType::get(llvm_types.i8, size));
     };
-
-
-#define IOPARM_START(name) std::vector<llvm::Type *> name##_elements;
-#define IOPARM_END(name)                                                 \
-    llvm::Type *ioparm_type_##name = llvm::StructType::create(           \
-        llvm_context, name##_elements, "st_parameter_" #name);           \
-    __attribute__((unused)) auto f_ioparm_type_##name = [&, this](TL &t) \
-    {                                                                    \
-        t.push_back(ioparm_type_##name);                                 \
+    auto add_type_common = [=](TL &t) {
+        t.push_back(gfortran_rt.st_parameter_common.get());
     };
-#define IOPARM(name, _, __, type) f_ioparm_type_##type(name##_elements);
-    IOPARM_LIST_FIELDS
-#undef IOPARM
-#undef IOPARM_END
-#undef IOPARM_START
 
-#define IOPARM_START(name)
-#define IOPARM_END(name)
-#define IOPARM(name, field_name, _, __) \
+#define IOPARM_START(name) \
+    auto create_##name = [=]() { \
+         llvm::StructType *ioparm_type_##name = llvm::StructType::create( \
+             llvm_context, "st_parameter_" #name); \
+         std::vector<llvm::Type *> name##_elements;
+#define IOPARM(name, field_name, __, type) \
+    add_type_##type(name##_elements); \
     fields[ioparm_type_##name].add_field(#field_name);
+#define IOPARM_END(name) \
+        ioparm_type_##name->setBody(name##_elements); \
+        return static_cast<llvm::Type*>(ioparm_type_##name); };
     IOPARM_LIST_FIELDS
-#undef IOPARM
 #undef IOPARM_END
+#undef IOPARM
 #undef IOPARM_START
 
-    this->gfortran_rt.st_parameter_common = ioparm_type_common;
-    this->gfortran_rt.st_parameter_dt = ioparm_type_dt;
+    this->gfortran_rt.st_parameter_common = create_common;
+    this->gfortran_rt.st_parameter_dt = create_dt;
 
-    this->gfortran_rt.st_write = llvm::Function::Create(
-        llvm::FunctionType::get(llvm_types.void_,
-                                { gfortran_rt.st_parameter_dt->getPointerTo() },
-                                /* isVarArg */ false),
-        llvm::GlobalValue::ExternalLinkage,
-        "_gfortran_st_write",
-        current_module.get());
+    this->gfortran_rt.st_write = [&, this]() {
+        return llvm::Function::Create(
+                llvm::FunctionType::get(llvm_types.void_,
+                    { gfortran_rt.st_parameter_dt.get()->getPointerTo() },
+                    /* isVarArg */ false),
+                llvm::GlobalValue::ExternalLinkage,
+                "_gfortran_st_write",
+                current_module.get());
+    };
 
-    this->gfortran_rt.transfer_character_write = llvm::Function::Create(
-        llvm::FunctionType::get(llvm_types.void_,
-                                { gfortran_rt.st_parameter_dt->getPointerTo(),
-                                  llvm_types.ptr_i8,
-                                  llvm_types.i32 },
-                                /* isVarArg */ false),
-        llvm::GlobalValue::ExternalLinkage,
-        "_gfortran_transfer_character_write",
-        current_module.get());
+    this->gfortran_rt.transfer_character_write = [&, this]() {
+        return llvm::Function::Create(
+                llvm::FunctionType::get(llvm_types.void_,
+                    { gfortran_rt.st_parameter_dt.get()->getPointerTo(),
+                    llvm_types.ptr_i8,
+                    llvm_types.i32 },
+                    /* isVarArg */ false),
+                llvm::GlobalValue::ExternalLinkage,
+                "_gfortran_transfer_character_write",
+                current_module.get());
+    };
 
-    this->gfortran_rt.transfer_integer_write = llvm::Function::Create(
-        llvm::FunctionType::get(llvm_types.void_,
-                                { gfortran_rt.st_parameter_dt->getPointerTo(),
-                                  llvm_types.ptr_i8,
-                                  llvm_types.i32 },
-                                /* isVarArg */ false),
-        llvm::GlobalValue::ExternalLinkage,
-        "_gfortran_transfer_integer_write",
-        current_module.get());
+    this->gfortran_rt.transfer_integer_write = [&, this]() {
+        return llvm::Function::Create(
+                llvm::FunctionType::get(llvm_types.void_,
+                    { gfortran_rt.st_parameter_dt.get()->getPointerTo(),
+                    llvm_types.ptr_i8,
+                    llvm_types.i32 },
+                    /* isVarArg */ false),
+                llvm::GlobalValue::ExternalLinkage,
+                "_gfortran_transfer_integer_write",
+                current_module.get());
+    };
 
-    this->gfortran_rt.transfer_real_write = llvm::Function::Create(
-        llvm::FunctionType::get(llvm_types.void_,
-                                { gfortran_rt.st_parameter_dt->getPointerTo(),
-                                  llvm_types.ptr_i8,
-                                  llvm_types.i32 },
-                                /* isVarArg */ false),
-        llvm::GlobalValue::ExternalLinkage,
-        "_gfortran_transfer_real_write",
-        current_module.get());
+    this->gfortran_rt.transfer_real_write = [&, this]() { 
+        return llvm::Function::Create(
+                llvm::FunctionType::get(llvm_types.void_,
+                    { gfortran_rt.st_parameter_dt.get()->getPointerTo(),
+                    llvm_types.ptr_i8,
+                    llvm_types.i32 },
+                    /* isVarArg */ false),
+                llvm::GlobalValue::ExternalLinkage,
+                "_gfortran_transfer_real_write",
+                current_module.get()); 
+    };
 
-    this->gfortran_rt.st_write_done = llvm::Function::Create(
-        llvm::FunctionType::get(llvm_types.void_,
-                                { gfortran_rt.st_parameter_dt->getPointerTo() },
-                                /* isVarArg */ false),
-        llvm::GlobalValue::ExternalLinkage,
-        "_gfortran_st_write_done",
-        current_module.get());
+    this->gfortran_rt.st_write_done = [&, this]() { 
+        return llvm::Function::Create(
+                llvm::FunctionType::get(llvm_types.void_,
+                    { gfortran_rt.st_parameter_dt.get()->getPointerTo() },
+                    /* isVarArg */ false),
+                llvm::GlobalValue::ExternalLinkage,
+                "_gfortran_st_write_done",
+                current_module.get());
+    };
 
-    this->gfortran_rt.set_args = llvm::Function::Create(
-        llvm::FunctionType::get(
-            llvm_types.void_,
-            { llvm_types.i32,
-              llvm_types.ptr_i8->getPointerTo() },
-            /* isVarArg */ false),
-        llvm::GlobalValue::ExternalLinkage,
-        "_gfortran_set_args",
-        current_module.get());
+    this->gfortran_rt.set_args = [&, this]() {
+        return llvm::Function::Create(
+                llvm::FunctionType::get(
+                    llvm_types.void_,
+                    { llvm_types.i32,
+                    llvm_types.ptr_i8->getPointerTo() },
+                    /* isVarArg */ false),
+                llvm::GlobalValue::ExternalLinkage,
+                "_gfortran_set_args",
+                current_module.get());
+    };
 
-    this->gfortran_rt.set_options = llvm::Function::Create(
-        llvm::FunctionType::get(llvm_types.void_,
-                                { llvm_types.i32,
-                                  llvm_types.ptr_i32 },
-                                /* isVarArg */ false),
-        llvm::GlobalValue::ExternalLinkage,
-        "_gfortran_set_options",
-        current_module.get());
+    this->gfortran_rt.set_options = [&, this]() {
+        return llvm::Function::Create(
+                llvm::FunctionType::get(llvm_types.void_,
+                    { llvm_types.i32,
+                    llvm_types.ptr_i32 },
+                    /* isVarArg */ false),
+                llvm::GlobalValue::ExternalLinkage,
+                "_gfortran_set_options",
+                current_module.get());
+    };
 
-    this->gfortran_rt.stop_int = llvm::Function::Create(
-        llvm::FunctionType::get(llvm_types.void_,
-                                { llvm_types.i32 },
-                                /* isVarArg */ false),
-        llvm::GlobalValue::ExternalLinkage,
-        "_gfortran_stop_numeric_f08",
-        current_module.get());
+    this->gfortran_rt.stop_int = [&, this]() {
+        return llvm::Function::Create(
+                llvm::FunctionType::get(llvm_types.void_,
+                    { llvm_types.i32 },
+                    /* isVarArg */ false),
+                llvm::GlobalValue::ExternalLinkage,
+                "_gfortran_stop_numeric_f08",
+                current_module.get());
+    };
 }
 
 void FortranLLVM::initialize_llvm_context()
@@ -2559,10 +2556,10 @@ void FortranLLVM::emit_main(llvm::Function *fortran_program)
     {
         main_args.push_back(&v);
     }
-    ir_builder->CreateCall(gfortran_rt.set_args, main_args);
+    ir_builder->CreateCall(gfortran_rt.set_args.get(), main_args);
 
     ir_builder->CreateCall(
-        gfortran_rt.set_options,
+        gfortran_rt.set_options.get(),
         { get_integer_value_32(9),
           ir_builder->CreatePointerCast(options, llvm_types.ptr_i32) });
 
