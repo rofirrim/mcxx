@@ -460,6 +460,7 @@ void FortranLLVM::visit(const Nodecl::IfElseStatement& node)
 
 void FortranLLVM::visit(const Nodecl::ForStatement& node)
 {
+    TrackLocation loc(this, node.get_locus());
     Nodecl::NodeclBase loop_control = node.get_loop_header();
     Nodecl::NodeclBase body = node.get_statement();
 
@@ -1826,6 +1827,8 @@ llvm::Value *FortranLLVM::create_alloca(llvm::Type *t,
                                    llvm::Value *array_size,
                                    const llvm::Twine &name)
 {
+    llvm::DebugLoc old_debug_loc = ir_builder->getCurrentDebugLocation();
+
     llvm::IRBuilderBase::InsertPoint saved_ip = change_to_allocating_block();
 
     llvm::Value *tmp
@@ -1833,6 +1836,7 @@ llvm::Value *FortranLLVM::create_alloca(llvm::Type *t,
 
     return_from_allocating_block(saved_ip);
 
+    ir_builder->SetCurrentDebugLocation(old_debug_loc);
     return tmp;
 }
 
@@ -2163,6 +2167,8 @@ void FortranLLVM::emit_variable(TL::Symbol sym)
     if (get_value(sym) != NULL)
         return;
 
+    llvm::DebugLoc old_debug_loc = ir_builder->getCurrentDebugLocation();
+
     llvm::Value *array_size = nullptr;
     if (sym.get_type().is_array() && sym.get_type().array_is_vla())
     {
@@ -2208,6 +2214,8 @@ void FortranLLVM::emit_variable(TL::Symbol sym)
                 sym.get_column(),
                 get_debug_scope()),
             ir_builder->GetInsertBlock());
+
+    ir_builder->SetCurrentDebugLocation(old_debug_loc);
 }
 
 void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
