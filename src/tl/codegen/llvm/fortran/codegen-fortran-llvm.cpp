@@ -1626,9 +1626,18 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         ERROR_CONDITION(
             !called_type.is_function(), "Expecting a function type here", 0);
 
-        if (called_type.lacks_prototype())
-            internal_error(
-                "Calls to unprototyped functions not yet implemented", 0);
+        bool call_without_interface = called_type.lacks_prototype()
+            // This check is required because the FE updates the symbol of the
+            // call but does not update the argument list, so the type may not
+            // be prototyped.  Fortunately, the FE has kept the original
+            // unprototyped in the alternate name so we can query that one
+            // instead and tell that, after all, this call is unprototyped.
+            // Ideally the FE should update the arguments of the call but it is
+            // not doing that yet.
+            || (!node.get_alternate_name().is_null()
+                && node.get_alternate_name().get_symbol().is_valid()
+                && node.get_alternate_name().get_symbol().get_type().is_valid()
+                && node.get_alternate_name().get_symbol().get_type().lacks_prototype());
 
         if (called_sym.is_from_module())
         {
@@ -1650,6 +1659,29 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             /* no attributes so far */ llvm::AttributeSet());
         llvm::Function *fun = llvm::cast<llvm::Function>(c);
 
+        // Make sure we use the right unprototyped type here. The FE does not
+        // set the number of arguments so we need to compute a correctly
+        // numbered unprototyped type here.
+        if (call_without_interface)
+        {
+            TL::Type ret_type;
+            if (called_type.lacks_prototype())
+            {
+                ret_type = called_type.returns();
+            }
+            else
+            {
+                ret_type = node.get_alternate_name().get_symbol().get_type().returns();
+            }
+            // Note, this will create a function with int parameters. Make sure they are not used.
+            called_type = ::get_nonproto_function_type(
+                    ret_type.get_internal_type(),
+                    arguments.size());
+            // This will create a function with i8* parameters.
+            function_type = llvm::cast<llvm::FunctionType>(
+                    llvm_visitor->get_llvm_type(called_type));
+        }
+
         TL::ObjectList<TL::Type> parameters = called_type.parameters();
 
         std::vector<llvm::Value *> val_arguments;
@@ -1662,36 +1694,45 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         {
             Nodecl::NodeclBase arg = *it_arg;
             ERROR_CONDITION(!arg.is<Nodecl::FortranActualArgument>(),
-                            "Unexpected node '%s'",
-                            ast_print_node_type(arg.get_kind()));
+                    "Unexpected node '%s'",
+                    ast_print_node_type(arg.get_kind()));
             arg = arg.as<Nodecl::FortranActualArgument>().get_argument();
 
-            llvm::Value *varg = llvm_visitor->eval_expression(arg);
-
-            if (it_param->no_ref().is_array())
+            llvm::Value *varg = nullptr;
+            if (call_without_interface)
             {
-                TL::Type array_type = it_param->no_ref();
-                if (array_type.array_is_vla())
-                {
-                    TL::Type element_type = array_type.array_base_element();
-
-                    // Cast to a pointer of the element
-                    varg = llvm_visitor->ir_builder->CreateBitCast(
+                varg = llvm_visitor->eval_expression_to_memory(arg);
+                varg = llvm_visitor->ir_builder->CreateBitCast(
                         varg,
-                        llvm::PointerType::get(
-                            llvm_visitor->get_llvm_type(element_type),
-                            /* AddressSpace */ 0));
-                }
-                else if (array_type.array_requires_descriptor())
+                        llvm_visitor->llvm_types.ptr_i8);
+            }
+            else
+            {
+                varg = llvm_visitor->eval_expression(arg);
+                if (it_param->no_ref().is_array())
                 {
-                    internal_error("Not yet implemented", 0);
-                }
-                else
-                {
-                    // Nothing special has to be done
+                    TL::Type array_type = it_param->no_ref();
+                    if (array_type.array_is_vla())
+                    {
+                        TL::Type element_type = array_type.array_base_element();
+
+                        // Cast to a pointer of the element
+                        varg = llvm_visitor->ir_builder->CreateBitCast(
+                                varg,
+                                llvm::PointerType::get(
+                                    llvm_visitor->get_llvm_type(element_type),
+                                    /* AddressSpace */ 0));
+                    }
+                    else if (array_type.array_requires_descriptor())
+                    {
+                        internal_error("Not yet implemented", 0);
+                    }
+                    else
+                    {
+                        // Nothing special has to be done
+                    }
                 }
             }
-
 
             val_arguments.push_back(varg);
 
@@ -1703,7 +1744,17 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                         "Mismatch between arguments and parameters",
                         0);
 
-        value = llvm_visitor->ir_builder->CreateCall(fun, val_arguments);
+        if (call_without_interface)
+        {
+            llvm::Value *bitcast = llvm_visitor->ir_builder->CreateBitCast(
+                    fun,
+                    llvm::PointerType::get(function_type, /* AddressSpace */ 0));
+            value = llvm_visitor->ir_builder->CreateCall(bitcast, val_arguments);
+        }
+        else
+        {
+            value = llvm_visitor->ir_builder->CreateCall(fun, val_arguments);
+        }
     }
 
     // void visit(const Nodecl::FortranActualArgument& node);
@@ -1849,13 +1900,23 @@ llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
         std::vector<llvm::Type *> llvm_params;
         llvm_params.reserve(params.size());
 
-        for (TL::Type t : params)
+        if (t.lacks_prototype())
         {
-            llvm_params.push_back(get_llvm_type(t));
+            for (TL::Type t : params)
+            {
+                llvm_params.push_back(llvm_types.ptr_i8);
+            }
+        }
+        else
+        {
+            for (TL::Type t : params)
+            {
+                llvm_params.push_back(get_llvm_type(t));
+            }
         }
         return llvm::FunctionType::get(get_llvm_type(t.returns()),
-                                       llvm_params,
-                                       /* isVarArg */ false);
+                llvm_params,
+                /* isVarArg */ false);
     }
     else if (t.is_signed_integral() || t.is_bool())
     {
