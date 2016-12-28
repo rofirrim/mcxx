@@ -475,25 +475,21 @@ void FortranLLVM::visit(const Nodecl::ForStatement& node)
     Nodecl::NodeclBase upper = range_loop_control.get_upper();
     Nodecl::NodeclBase step = range_loop_control.get_step();
 
-    if (!step.is_null() && !step.is_constant())
-        internal_error("Not yet implemented", 0);
-
-    if (const_value_is_positive(step.get_constant()))
-    {
-    }
-    else
-        internal_error("Not yet implemented", 0);
+    bool constant_step = step.is_null() || step.is_constant();
+    bool positive_step = constant_step && const_value_is_positive(step.get_constant());
 
     llvm::Value* vind_var = eval_expression(ind_var);
-    llvm::Value* vlower = eval_expression(lower);
-    llvm::Value* vupper = eval_expression(upper);
+
+    llvm::Value* vstart = eval_expression(lower);
+    llvm::Value* vend = eval_expression(upper);
+
     llvm::Value* vstep;
     if (step.is_null())
         vstep = get_integer_value(1, ind_var.get_symbol().get_type());
     else
         vstep = eval_expression(step);
 
-    ir_builder->CreateStore(vlower, vind_var);
+    ir_builder->CreateStore(vstart, vind_var);
 
     llvm::BasicBlock *block_check = llvm::BasicBlock::Create(
         llvm_context, "loop.check", get_current_function());
@@ -505,9 +501,36 @@ void FortranLLVM::visit(const Nodecl::ForStatement& node)
     ir_builder->CreateBr(block_check);
 
     set_current_block(block_check);
-    llvm::Value* vcheck = ir_builder->CreateICmpSLE(
-            ir_builder->CreateLoad(vind_var),
-            vupper);
+    llvm::Value* vcheck;
+    if (constant_step)
+    {
+        if (positive_step)
+            // i <= U
+            vcheck = ir_builder->CreateICmpSLE(
+                    ir_builder->CreateLoad(vind_var),
+                    vend);
+        else
+            // i >= U
+            vcheck = ir_builder->CreateICmpSGE(
+                    ir_builder->CreateLoad(vind_var),
+                    vend);
+    }
+    else
+    {
+        // I'm aware that replicating the loop could be more efficient but for now this will do
+        // i * S <= U * S (i.e. if S < 0 then this is i * |S| >= U * |S|)
+        // Here S will be the sign of the step (i.e. 1 or -1)
+        llvm::Value *vsign_check = ir_builder->CreateICmpSLT(
+                vstep, get_integer_value(0, ind_var.get_symbol().get_type()));
+        llvm::Value *vsign = ir_builder->CreateSelect(vsign_check,
+            get_integer_value(-1, ind_var.get_symbol().get_type()),
+            get_integer_value(1, ind_var.get_symbol().get_type()));
+
+        vcheck = ir_builder->CreateICmpSLE(
+                ir_builder->CreateMul(ir_builder->CreateLoad(vind_var), vsign),
+                ir_builder->CreateMul(vend, vsign));
+    }
+
     ir_builder->CreateCondBr(vcheck, block_body, block_end);
 
     set_current_block(block_body);
