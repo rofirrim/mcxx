@@ -948,8 +948,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                            print_declarator(base_type.get_internal_type()));
         }
 
-        llvm::StructType *struct_type = llvm::cast<llvm::StructType>(llvm_visitor->get_llvm_type(node.get_type()));
-        value = llvm::ConstantStruct::get(struct_type, { llvm::cast<llvm::Constant>(real_value), llvm::cast<llvm::Constant>(imag_value) });
+        value = llvm::ConstantVector::get({ llvm::cast<llvm::Constant>(real_value), llvm::cast<llvm::Constant>(imag_value) });
     }
 
     void visit(const Nodecl::ObjectInit& node)
@@ -1487,8 +1486,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     llvm::Value *create_complex_value(TL::Type complex_type, llvm::Value *real, llvm::Value *imag)
     {
         llvm::Value *result = llvm::UndefValue::get(llvm_visitor->get_llvm_type(complex_type));
-        result = llvm_visitor->ir_builder->CreateInsertValue(result, real, 0u);
-        result = llvm_visitor->ir_builder->CreateInsertValue(result, imag, 1u);
+        result = llvm_visitor->ir_builder->CreateInsertElement(result, real, uint64_t(0));
+        result = llvm_visitor->ir_builder->CreateInsertElement(result, imag, 1);
         return result;
     }
 
@@ -1500,11 +1499,11 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         auto create_complex_add = [&, this](llvm::Value *lhs, llvm::Value *rhs) {
             // (a, b) + (c, d) = (a + b, c + d)
             llvm::Value *real_part = llvm_visitor->ir_builder->CreateFAdd(
-                    llvm_visitor->ir_builder->CreateExtractValue(lhs, 0u),
-                    llvm_visitor->ir_builder->CreateExtractValue(rhs, 0u));
+                    llvm_visitor->ir_builder->CreateExtractElement(lhs, uint64_t(0)),
+                    llvm_visitor->ir_builder->CreateExtractElement(rhs, uint64_t(0)));
             llvm::Value *imag_part = llvm_visitor->ir_builder->CreateFAdd(
-                    llvm_visitor->ir_builder->CreateExtractValue(lhs, 1u),
-                    llvm_visitor->ir_builder->CreateExtractValue(rhs, 1u));
+                    llvm_visitor->ir_builder->CreateExtractElement(lhs, 1),
+                    llvm_visitor->ir_builder->CreateExtractElement(rhs, 1));
             return create_complex_value(node.get_type(), real_part, imag_part);
         };
 
@@ -1519,11 +1518,11 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         auto create_complex_sub = [&, this](llvm::Value *lhs, llvm::Value *rhs) {
             // (a, b) - (c, d) = (a - b, c - d)
             llvm::Value *real_part = llvm_visitor->ir_builder->CreateFSub(
-                    llvm_visitor->ir_builder->CreateExtractValue(lhs, 0u),
-                    llvm_visitor->ir_builder->CreateExtractValue(rhs, 0u));
+                    llvm_visitor->ir_builder->CreateExtractElement(lhs, uint64_t(0)),
+                    llvm_visitor->ir_builder->CreateExtractElement(rhs, uint64_t(0)));
             llvm::Value *imag_part = llvm_visitor->ir_builder->CreateFSub(
-                    llvm_visitor->ir_builder->CreateExtractValue(lhs, 1u),
-                    llvm_visitor->ir_builder->CreateExtractValue(rhs, 1u));
+                    llvm_visitor->ir_builder->CreateExtractElement(lhs, 1),
+                    llvm_visitor->ir_builder->CreateExtractElement(rhs, 1));
             return create_complex_value(node.get_type(), real_part, imag_part);
         };
 
@@ -1537,10 +1536,10 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     {
         auto create_complex_mul = [&, this](llvm::Value *lhs, llvm::Value *rhs) {
             // (a, b) * (c, d) = (ac - bd, ad + bc)
-            llvm::Value *a = llvm_visitor->ir_builder->CreateExtractValue(lhs, 0u);
-            llvm::Value *b = llvm_visitor->ir_builder->CreateExtractValue(lhs, 1u);
-            llvm::Value *c = llvm_visitor->ir_builder->CreateExtractValue(rhs, 0u);
-            llvm::Value *d = llvm_visitor->ir_builder->CreateExtractValue(rhs, 1u);
+            llvm::Value *a = llvm_visitor->ir_builder->CreateExtractElement(lhs, uint64_t(0));
+            llvm::Value *b = llvm_visitor->ir_builder->CreateExtractElement(lhs, 1);
+            llvm::Value *c = llvm_visitor->ir_builder->CreateExtractElement(rhs, uint64_t(0));
+            llvm::Value *d = llvm_visitor->ir_builder->CreateExtractElement(rhs, 1);
 
             llvm::Value *real_part = llvm_visitor->ir_builder->CreateFSub(
                 llvm_visitor->ir_builder->CreateFMul(a, c),
@@ -1562,10 +1561,10 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     {
         auto create_complex_div = [&, this](llvm::Value *lhs, llvm::Value *rhs) {
             // (a, b) / (c, d) = ((ac + bd) / (c^2 + d^2), (bc - ad) / (c^2 + d^2))
-            llvm::Value *a = llvm_visitor->ir_builder->CreateExtractValue(lhs, 0u);
-            llvm::Value *b = llvm_visitor->ir_builder->CreateExtractValue(lhs, 1u);
-            llvm::Value *c = llvm_visitor->ir_builder->CreateExtractValue(rhs, 0u);
-            llvm::Value *d = llvm_visitor->ir_builder->CreateExtractValue(rhs, 1u);
+            llvm::Value *a = llvm_visitor->ir_builder->CreateExtractElement(lhs, uint64_t(0));
+            llvm::Value *b = llvm_visitor->ir_builder->CreateExtractElement(lhs, 1);
+            llvm::Value *c = llvm_visitor->ir_builder->CreateExtractElement(rhs, uint64_t(0));
+            llvm::Value *d = llvm_visitor->ir_builder->CreateExtractElement(rhs, 1);
 
             llvm::Value *divisor = llvm_visitor->ir_builder->CreateFAdd(
                     llvm_visitor->ir_builder->CreateFMul(c, c),
@@ -1710,10 +1709,32 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             return llvm_visitor->ir_builder->CreateCall(powf, {lhs, rhs});
         };
 
+        auto create_pow_complex = [&, this](llvm::Value* lhs, llvm::Value *rhs) {
+            llvm::Type* complex_type = llvm_visitor->get_llvm_type(node.get_type());
+            std::string cpow_name;
+            TL::Type base_type = node.get_type().complex_get_base_type();
+            if (base_type.is_float())
+                cpow_name = "cpowf";
+            else if (base_type.is_double())
+                cpow_name = "cpow";
+            else
+                internal_error("Unsupported type for complex power '%s'\n", print_declarator(node.get_type().get_internal_type()));
+
+            llvm::Function *cpow_fun = llvm::cast<llvm::Function>(
+                    llvm_visitor->current_module->getOrInsertFunction(
+                        cpow_name,
+                        llvm::FunctionType::get(
+                            complex_type,
+                            { complex_type, complex_type },
+                            /* isVarArg */ false),
+                        /* no attributes so far */ llvm::AttributeSet()));
+            return llvm_visitor->ir_builder->CreateCall(cpow_fun, {lhs, rhs});
+        };
+
         arithmetic_binary_operator(node,
                 create_pow_int,
                 create_pow_float,
-                UNIMPLEMENTED_OP);
+                create_pow_complex);
     }
 
     template <typename Node, typename CreateSInt, typename CreateFloat, typename CreateComplex>
@@ -2257,7 +2278,7 @@ llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
     {
         llvm::Type *base_type = get_llvm_type(t.complex_get_base_type());
         // tuple: real, imag
-        return llvm::StructType::get(llvm_context, {base_type, base_type});
+        return llvm::VectorType::get(base_type, 2);
     }
     else if (t.is_array()
             && !t.array_requires_descriptor()
