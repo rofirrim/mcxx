@@ -916,7 +916,41 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         }
     }
 
-    // void visit(const Nodecl::ComplexLiteral& node);
+    void visit(const Nodecl::ComplexLiteral& node)
+    {
+        FortranLLVM::TrackLocation loc(llvm_visitor, node);
+
+        TL::Type base_type = node.get_type().complex_get_base_type();
+        const_value_t *cval = node.get_constant();
+
+        llvm::Value *real_value, *imag_value;
+        if (base_type.is_float())
+        {
+            real_value = value = llvm::ConstantFP::get(
+                llvm_visitor->llvm_context,
+                llvm::APFloat(const_value_cast_to_float(const_value_complex_get_real_part(cval))));
+            imag_value = value = llvm::ConstantFP::get(
+                llvm_visitor->llvm_context,
+                llvm::APFloat(const_value_cast_to_float(const_value_complex_get_imag_part(cval))));
+        }
+        else if (base_type.is_double())
+        {
+            real_value = value = llvm::ConstantFP::get(
+                llvm_visitor->llvm_context,
+                llvm::APFloat(const_value_cast_to_double(const_value_complex_get_real_part(cval))));
+            imag_value = value = llvm::ConstantFP::get(
+                llvm_visitor->llvm_context,
+                llvm::APFloat(const_value_cast_to_double(const_value_complex_get_imag_part(cval))));
+        }
+        else
+        {
+            internal_error("Unexpected type '%s'",
+                           print_declarator(base_type.get_internal_type()));
+        }
+
+        llvm::StructType *struct_type = llvm::cast<llvm::StructType>(llvm_visitor->get_llvm_type(node.get_type()));
+        value = llvm::ConstantStruct::get(struct_type, { llvm::cast<llvm::Constant>(real_value), llvm::cast<llvm::Constant>(imag_value) });
+    }
 
     void visit(const Nodecl::ObjectInit& node)
     {
@@ -1036,14 +1070,15 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             llvm_visitor->get_integer_value(1, rhs_type));
     }
 
-    template <typename CreateSInt, typename CreateFloat>
+    template <typename CreateSInt, typename CreateFloat, typename CreateComplex>
     llvm::Value *arithmetic_binary_op_elemental_intrinsic(
         TL::Type lhs_type,
         TL::Type rhs_type,
         llvm::Value *lhs_val,
         llvm::Value *rhs_val,
         CreateSInt create_sint,
-        CreateFloat create_float)
+        CreateFloat create_float,
+        CreateComplex create_complex)
     {
         if (lhs_type.is_signed_integral() && rhs_type.is_signed_integral())
         {
@@ -1052,6 +1087,10 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         else if (lhs_type.is_floating_type() && rhs_type.is_floating_type())
         {
             return create_float(lhs_val, rhs_val);
+        }
+        else if (lhs_type.is_complex() && rhs_type.is_complex())
+        {
+            return create_complex(lhs_val, rhs_val);
         }
         else
         {
@@ -1201,7 +1240,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         llvm_visitor->set_current_block(block_end);
     }
 
-    template <typename CreateSInt, typename CreateFloat>
+    template <typename CreateSInt, typename CreateFloat, typename CreateComplex>
     void arithmetic_binary_operator_array_loop(const Nodecl::NodeclBase &lhs,
                                                const Nodecl::NodeclBase &rhs,
                                                TL::Type lhs_type,
@@ -1211,7 +1250,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                                                llvm::Value *result_addr,
                                                llvm::Value *result_idx_addr,
                                                CreateSInt create_sint,
-                                               CreateFloat create_float)
+                                               CreateFloat create_float,
+                                               CreateComplex create_complex)
     {
         // FIXME - Use the easiest of the two to compute
         llvm::Value *dim_idx = llvm_visitor->ir_builder->CreateAlloca(llvm_visitor->llvm_types.i64);
@@ -1271,7 +1311,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                             lhs_elem_val,
                             rhs_elem_val,
                             create_sint,
-                            create_float);
+                            create_float,
+                            create_complex);
 
                     // Compute result address
                     llvm::Value *result_idx_val
@@ -1327,16 +1368,18 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                         result_addr,
                         result_idx_addr,
                         create_sint,
-                        create_float);
+                        create_float,
+                        create_complex);
                 }
             });
     }
 
-    template <typename CreateSInt, typename CreateFloat>
+    template <typename CreateSInt, typename CreateFloat, typename CreateComplex>
     void arithmetic_binary_operator_array(const Nodecl::NodeclBase &lhs,
                                           const Nodecl::NodeclBase &rhs,
                                           CreateSInt create_sint,
-                                          CreateFloat create_float)
+                                          CreateFloat create_float,
+                                          CreateComplex create_complex)
     {
         TL::Type lhs_type = lhs.get_type();
         TL::Type rhs_type = rhs.get_type();
@@ -1375,24 +1418,27 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                                               result_addr,
                                               result_idx_addr,
                                               create_sint,
-                                              create_float);
+                                              create_float,
+                                              create_complex);
 
         value = result_addr;
     }
 
-    template <typename Node, typename CreateSInt, typename CreateFloat>
+    template <typename Node, typename CreateSInt, typename CreateFloat, typename CreateComplex>
     void arithmetic_binary_operator_array_scalar(const Node lhs,
                                                  const Node rhs,
                                                  CreateSInt create_sint,
-                                                 CreateFloat create_float)
+                                                 CreateFloat create_float,
+                                                 CreateComplex create_complex)
     {
         internal_error("Array + scalar not implemented yet", 0);
     }
 
-    template <typename Node, typename CreateSInt, typename CreateFloat>
+    template <typename Node, typename CreateSInt, typename CreateFloat, typename CreateComplex>
     void arithmetic_binary_operator(const Node node,
                                CreateSInt create_sint,
-                               CreateFloat create_float)
+                               CreateFloat create_float,
+                               CreateComplex create_complex)
     {
         FortranLLVM::TrackLocation loc(llvm_visitor, node);
 
@@ -1422,7 +1468,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 else
                 {
                     return arithmetic_binary_operator_array(
-                        lhs, rhs, create_sint, create_float);
+                        lhs, rhs, create_sint, create_float, create_complex);
                 }
             }
             else
@@ -1435,36 +1481,42 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         llvm::Value *vrhs = llvm_visitor->eval_expression(rhs);
 
         value = arithmetic_binary_op_elemental_intrinsic(
-            lhs_type, rhs_type, vlhs, vrhs, create_sint, create_float);
+            lhs_type, rhs_type, vlhs, vrhs, create_sint, create_float, create_complex);
     }
 
 #define CREATOR(Creator) [&, this](llvm::Value* lhs, llvm::Value* rhs) { return llvm_visitor->ir_builder->Creator(lhs, rhs); }
+#define INVALID_OP [&, this](llvm::Value* lhs, llvm::Value* rhs) -> llvm::Value* { internal_error("Invalid operation", 0); return nullptr; }
+#define UNIMPLEMENTED_OP [&, this](llvm::Value* lhs, llvm::Value* rhs) -> llvm::Value* { internal_error("Operation not yet implemented", 0); return nullptr; }
     void visit(const Nodecl::Add& node)
     {
         arithmetic_binary_operator(node,
                               CREATOR(CreateAdd),
-                              CREATOR(CreateFAdd));
+                              CREATOR(CreateFAdd),
+                              UNIMPLEMENTED_OP);
     }
 
     void visit(const Nodecl::Minus& node)
     {
         arithmetic_binary_operator(node,
                               CREATOR(CreateSub),
-                              CREATOR(CreateFSub));
+                              CREATOR(CreateFSub),
+                              UNIMPLEMENTED_OP);
     }
 
     void visit(const Nodecl::Mul& node)
     {
         arithmetic_binary_operator(node,
                               CREATOR(CreateMul),
-                              CREATOR(CreateFMul));
+                              CREATOR(CreateFMul),
+                              UNIMPLEMENTED_OP);
     }
 
     void visit(const Nodecl::Div& node)
     {
         arithmetic_binary_operator(node,
                               CREATOR(CreateSDiv),
-                              CREATOR(CreateFDiv));
+                              CREATOR(CreateFDiv),
+                              UNIMPLEMENTED_OP);
     }
 
     void visit(const Nodecl::Power& node)
@@ -1589,15 +1641,17 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
         arithmetic_binary_operator(node,
                 create_pow_int,
-                create_pow_float);
+                create_pow_float,
+                UNIMPLEMENTED_OP);
     }
 
-    template <typename Node, typename CreateSInt, typename CreateFloat>
+    template <typename Node, typename CreateSInt, typename CreateFloat, typename CreateComplex>
     void arithmetic_binary_comparison(const Node node,
                                       CreateSInt create_sint,
-                                      CreateFloat create_float)
+                                      CreateFloat create_float,
+                                      CreateComplex create_complex)
     {
-        arithmetic_binary_operator(node, create_sint, create_float);
+        arithmetic_binary_operator(node, create_sint, create_float, create_complex);
 
         // Make sure the logical value stays in the proper integer size
         // and not just i1.
@@ -1611,44 +1665,52 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     {
         arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpSLT),
-                              CREATOR(CreateFCmpOLT));
+                              CREATOR(CreateFCmpOLT),
+                              UNIMPLEMENTED_OP);
     }
 
     void visit(const Nodecl::LowerOrEqualThan &node)
     {
         arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpSLE),
-                              CREATOR(CreateFCmpOLE));
+                              CREATOR(CreateFCmpOLE),
+                              UNIMPLEMENTED_OP);
     }
 
     void visit(const Nodecl::GreaterThan &node)
     {
         arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpSGT),
-                              CREATOR(CreateFCmpOGT));
+                              CREATOR(CreateFCmpOGT),
+                              UNIMPLEMENTED_OP);
     }
 
     void visit(const Nodecl::GreaterOrEqualThan &node)
     {
         arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpSGE),
-                              CREATOR(CreateFCmpOGE));
+                              CREATOR(CreateFCmpOGE),
+                              UNIMPLEMENTED_OP);
     }
 
     void visit(const Nodecl::Equal &node)
     {
         arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpEQ),
-                              CREATOR(CreateFCmpOEQ));
+                              CREATOR(CreateFCmpOEQ),
+                              UNIMPLEMENTED_OP);
     }
 
     void visit(const Nodecl::Different &node)
     {
         arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpNE),
-                              CREATOR(CreateFCmpONE));
+                              CREATOR(CreateFCmpONE),
+                              UNIMPLEMENTED_OP);
     }
 #undef CREATOR
+#undef UNIMPLEMENTED_OP
+#undef INVALID_OP
 
     // void visit(const Nodecl::Concat& node);
     // void visit(const Nodecl::ClassMemberAccess& node);
@@ -2120,6 +2182,12 @@ llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
     {
         return llvm_types.void_;
     }
+    else if (t.is_complex())
+    {
+        llvm::Type *base_type = get_llvm_type(t.complex_get_base_type());
+        // tuple: real, imag
+        return llvm::StructType::get(llvm_context, {base_type, base_type});
+    }
     else if (t.is_array()
             && !t.array_requires_descriptor()
             && !t.array_is_vla())
@@ -2194,6 +2262,16 @@ llvm::DIType *FortranLLVM::get_debug_info_type(TL::Type t)
     else if (t.is_void())
     {
         return dbg_builder->createUnspecifiedType("void");
+    }
+    else if (t.is_complex())
+    {
+        std::stringstream ss;
+        ss << "COMPLEX(KIND=" << t.complex_get_base_type().get_size() << ")";
+        std::string complex_typename = ss.str();
+
+        return dbg_builder->createBasicType(complex_typename,
+                t.get_size() * 8,
+                llvm::dwarf::DW_ATE_complex_float);
     }
     else if (t.is_array()
             && !t.array_requires_descriptor())
@@ -2453,6 +2531,15 @@ void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
             ir_builder->CreateCall(gfortran_rt.transfer_real_write.get(),
                                    { dt_parm, expr, eval_sizeof(n) });
         }
+        else if (t.no_ref().is_complex())
+        {
+            llvm::Value *expr = eval_expression_to_memory(n);
+
+            expr = ir_builder->CreatePointerCast(expr, llvm_types.ptr_i8);
+
+            ir_builder->CreateCall(gfortran_rt.transfer_complex_write.get(),
+                                   { dt_parm, expr, eval_sizeof(t.no_ref().complex_get_base_type()) });
+        }
         else
         {
             internal_error("Type '%s' not yet implemented",
@@ -2627,6 +2714,18 @@ void FortranLLVM::initialize_gfortran_runtime()
                     /* isVarArg */ false),
                 llvm::GlobalValue::ExternalLinkage,
                 "_gfortran_transfer_real_write",
+                current_module.get()); 
+    };
+
+    this->gfortran_rt.transfer_complex_write = [&, this]() { 
+        return llvm::Function::Create(
+                llvm::FunctionType::get(llvm_types.void_,
+                    { gfortran_rt.st_parameter_dt.get()->getPointerTo(),
+                    llvm_types.ptr_i8,
+                    llvm_types.i32 },
+                    /* isVarArg */ false),
+                llvm::GlobalValue::ExternalLinkage,
+                "_gfortran_transfer_complex_write",
                 current_module.get()); 
     };
 

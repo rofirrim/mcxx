@@ -134,6 +134,7 @@ namespace Codegen
             LazyObjectPtr<llvm::Function> transfer_character_write;
             LazyObjectPtr<llvm::Function> transfer_integer_write;
             LazyObjectPtr<llvm::Function> transfer_real_write;
+            LazyObjectPtr<llvm::Function> transfer_complex_write;
             LazyObjectPtr<llvm::Function> st_write_done;
 
             LazyObjectPtr<llvm::Function> set_args;
