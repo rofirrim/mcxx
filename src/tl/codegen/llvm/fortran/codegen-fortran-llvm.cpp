@@ -164,6 +164,72 @@ void FortranLLVM::visit(const Nodecl::TopLevel &node)
     std::swap(old_module, current_module);
 }
 
+// This strategy is not very efficient when there are many nested scopes as
+// several subtrees will be traversed many times but it makes the
+// implementation much cleaner and Fortran rarely has more than one lexical
+// scope per function.
+class FortranVisitorLLVMEmitVariables : public Nodecl::ExhaustiveVisitor<void>
+{
+    FortranLLVM *llvm_visitor;
+    TL::Scope current_scope;
+    TL::ObjectList<TL::Symbol> to_emit;
+
+    void check_symbol(TL::Symbol sym)
+    {
+        if (!sym.is_from_module()
+            && sym.is_variable()
+            && sym.get_scope() == current_scope)
+        {
+            // Check boundaries of arrays first in case
+            // they require a symbol not yet seen
+            TL::Type t = sym.get_type().no_ref();
+            while (t.is_array())
+            {
+                Nodecl::NodeclBase lower, upper;
+                t.array_get_bounds(lower, upper);
+                walk(lower);
+                walk(upper);
+                t = t.array_element();
+            }
+
+            // Saved expressions are symbols that will likely
+            // require other symbols
+            if (sym.is_saved_expression())
+                walk(sym.get_value());
+
+            to_emit.insert(sym);
+        }
+    }
+    public:
+    FortranVisitorLLVMEmitVariables(FortranLLVM *llvm_visitor, TL::Scope current_scope)
+        : llvm_visitor(llvm_visitor), current_scope(current_scope)
+    {
+    }
+
+    void visit(const Nodecl::Symbol &node)
+    {
+        TL::Symbol sym = node.get_symbol();
+        check_symbol(sym);
+    }
+
+    void visit(const Nodecl::ObjectInit &node)
+    {
+        TL::Symbol sym = node.get_symbol();
+        check_symbol(sym);
+    }
+
+    void emit_variables(const Nodecl::NodeclBase &node)
+    {
+        to_emit.clear();
+        walk(node);
+        for (TL::Symbol sym : to_emit)
+        {
+            llvm_visitor->emit_variable(sym);
+        }
+    }
+};
+
+
 void FortranLLVM::visit(const Nodecl::FunctionCode &node)
 {
     // Create a function with the proper type
@@ -259,7 +325,6 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
     llvm::BasicBlock *entry_basic_block
         = llvm::BasicBlock::Create(llvm_context, "entry", fun);
     set_current_block(entry_basic_block);
-    push_allocating_block(entry_basic_block);
 
     // Register parameters
     clear_mappings();
@@ -323,7 +388,12 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
                     "Mismatch between TL and llvm::Arguments",
                     0);
 
-
+    // Emit top level variables
+    FortranVisitorLLVMEmitVariables e(this,
+        nodecl_get_decl_context(context.get_internal_nodecl()));
+    e.emit_variables(context.get_in_context());
+    
+    // Emit statements
     walk(context.get_in_context());
 
     if (sym.is_fortran_main_program()
@@ -336,7 +406,7 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
         // Return the value in the return variable
         TL::Symbol return_variable = sym.get_result_variable();
         ERROR_CONDITION(!return_variable.is_valid(), "Result variable is missing?", 0);
-        // Make sure it has been emitted
+        // Make sure it has been emitted in case it has not been referenced at all
         emit_variable(return_variable);
         llvm::Value* addr_ret_val = get_value(return_variable);
         llvm::Value* value_ret_val = ir_builder->CreateLoad(addr_ret_val);
@@ -351,7 +421,6 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
         pop_debug_scope(); // module
     }
 
-    pop_allocating_block();
     clear_current_function();
 
     if (sym.is_fortran_main_program())
@@ -370,6 +439,12 @@ void FortranLLVM::visit(const Nodecl::Context &node)
     llvm::DILexicalBlock *lexical_block = dbg_builder->createLexicalBlock(get_debug_scope(), dbg_info.file,
             node.get_line(), node.get_column());
     push_debug_scope(lexical_block);
+
+    // Emit variables (if any)
+    FortranVisitorLLVMEmitVariables e(this,
+        nodecl_get_decl_context(node.get_internal_nodecl()));
+    e.emit_variables(node.get_in_context());
+
     walk(node.get_in_context());
     pop_debug_scope();
 }
@@ -404,14 +479,11 @@ void FortranLLVM::visit(const Nodecl::FortranStopStatement &node)
 
 void FortranLLVM::visit(const Nodecl::ObjectInit& node)
 {
-    
     TL::Symbol sym = node.get_symbol();
 
     if (sym.is_variable()
             && sym.is_saved_expression())
     {
-        // Model this like an assignment to the saved expression
-        emit_variable(sym);
         llvm::Value *vlhs = get_value(sym);
         llvm::Value *vrhs = eval_expression(sym.get_value());
 
@@ -576,8 +648,6 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     void visit(const Nodecl::Symbol &node)
     {
         FortranLLVM::TrackLocation loc(llvm_visitor, node);
-
-        llvm_visitor->emit_variable(node.get_symbol());
         value = llvm_visitor->get_value(node.get_symbol());
     }
 
@@ -1824,48 +1894,9 @@ llvm::Value *FortranLLVM::eval_expression(Nodecl::NodeclBase n)
     return v.get_value();
 }
 
-llvm::IRBuilderBase::InsertPoint FortranLLVM::change_to_allocating_block()
-{
-    llvm::IRBuilderBase::InsertPoint saved_ip = ir_builder->saveIP();
-
-    llvm::BasicBlock *alloca_bb = allocating_block();
-
-    // FIXME: I'm pretty sure it is possible to do this better.
-    llvm::BasicBlock::iterator bb_it = alloca_bb->begin();
-    while (bb_it != alloca_bb->end()
-            && !bb_it->isTerminator())
-        bb_it++;
-
-    ir_builder->SetInsertPoint(alloca_bb, bb_it);
-
-    return saved_ip;
-}
-
-void FortranLLVM::return_from_allocating_block(llvm::IRBuilderBase::InsertPoint previous_ip)
-{
-    ir_builder->restoreIP(previous_ip);
-}
-
-llvm::Value *FortranLLVM::create_alloca(llvm::Type *t,
-                                   llvm::Value *array_size,
-                                   const llvm::Twine &name)
-{
-    llvm::DebugLoc old_debug_loc = ir_builder->getCurrentDebugLocation();
-
-    llvm::IRBuilderBase::InsertPoint saved_ip = change_to_allocating_block();
-
-    llvm::Value *tmp
-        = ir_builder->CreateAlloca(t, array_size, name);
-
-    return_from_allocating_block(saved_ip);
-
-    ir_builder->SetCurrentDebugLocation(old_debug_loc);
-    return tmp;
-}
-
 llvm::Value *FortranLLVM::make_temporary(llvm::Value *v)
 {
-    llvm::Value *tmp = create_alloca(v->getType());
+    llvm::Value *tmp = ir_builder->CreateAlloca(v->getType());
     ir_builder->CreateStore(v, tmp);
     return tmp;
 }
@@ -2190,30 +2221,17 @@ void FortranLLVM::emit_variable(TL::Symbol sym)
     if (get_value(sym) != NULL)
         return;
 
-    llvm::DebugLoc old_debug_loc = ir_builder->getCurrentDebugLocation();
-
     llvm::Value *array_size = nullptr;
     if (sym.get_type().is_array() && sym.get_type().array_is_vla())
     {
         // Emit size
-        llvm::IRBuilderBase::InsertPoint previous_ip = change_to_allocating_block();
         TrackLocation loc(this, sym.get_locus());
-
-        bool block_was_terminated = get_current_block()->getTerminator() != nullptr;
 
         TL::Type t = sym.get_type();
         array_size = evaluate_size_of_array(t);
-
-        if (get_current_block() != allocating_block()
-                && block_was_terminated)
-        {
-            internal_error("We have split the allocating block. Not implemented yet", 0);
-        }
-
-        return_from_allocating_block(previous_ip);
     }
 
-    llvm::Value *allocation = create_alloca(
+    llvm::Value *allocation = ir_builder->CreateAlloca(
         get_llvm_type(sym.get_type()), array_size, sym.get_name());
     map_symbol_to_value(sym, allocation);
 
@@ -2237,8 +2255,6 @@ void FortranLLVM::emit_variable(TL::Symbol sym)
                 sym.get_column(),
                 get_debug_scope()),
             ir_builder->GetInsertBlock());
-
-    ir_builder->SetCurrentDebugLocation(old_debug_loc);
 }
 
 void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
@@ -2254,7 +2270,7 @@ void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
 
     // Allocate data transfer structure
     llvm::Value *dt_parm
-        = create_alloca(gfortran_rt.st_parameter_dt.get(), nullptr, "dt_parm");
+        = ir_builder->CreateAlloca(gfortran_rt.st_parameter_dt.get(), nullptr, "dt_parm");
 
     // dt_parm.common.filename = "file";
     // dt_parm.common.line = "file";
@@ -2580,7 +2596,6 @@ void FortranLLVM::emit_main(llvm::Function *fortran_program)
     set_current_function(fun);
     llvm::BasicBlock *entry_basic_block = llvm::BasicBlock::Create(llvm_context, "entry", fun);
     set_current_block(entry_basic_block);
-    push_allocating_block(entry_basic_block);
 
     std::vector<llvm::Value *> main_args;
     for (llvm::Argument &v : fun->args())
@@ -2598,7 +2613,6 @@ void FortranLLVM::emit_main(llvm::Function *fortran_program)
 
     ir_builder->CreateRet(get_integer_value_32(0));
 
-    pop_allocating_block();
     clear_current_function();
 }
 

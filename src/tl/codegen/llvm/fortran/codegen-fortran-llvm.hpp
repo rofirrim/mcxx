@@ -293,29 +293,6 @@ namespace Codegen
             return ir_builder->GetInsertBlock();
         }
 
-        // Basic block where we emit allocas
-        std::vector<llvm::BasicBlock*> stack_alloca_bb;
-        void push_allocating_block(llvm::BasicBlock *b)
-        {
-            stack_alloca_bb.emplace_back(b);
-        }
-        void pop_allocating_block()
-        {
-            ERROR_CONDITION(stack_alloca_bb.empty(), "Stack of allocating basic blocks is empty", 0);
-            stack_alloca_bb.pop_back();
-        }
-        llvm::BasicBlock* allocating_block()
-        {
-            ERROR_CONDITION(stack_alloca_bb.empty(), "Stack of allocating basic blocks is empty", 0);
-            return stack_alloca_bb.back();
-        }
-        llvm::IRBuilderBase::InsertPoint change_to_allocating_block();
-        void return_from_allocating_block(llvm::IRBuilderBase::InsertPoint PreviousIP);
-        // Intentionally similar to CreateAlloca but creates it in the allocating_block
-        llvm::Value *create_alloca(llvm::Type *t,
-                                   llvm::Value *array_size = nullptr,
-                                   const llvm::Twine &name = "");
-
         void emit_variable(TL::Symbol sym);
 
         // Takes into account region arrays
@@ -348,6 +325,7 @@ namespace Codegen
 
         void emit_main(llvm::Function *fortran_program);
 
+        friend class FortranVisitorLLVMEmitVariables;
         friend class FortranVisitorLLVMExpression;
     };
 }
