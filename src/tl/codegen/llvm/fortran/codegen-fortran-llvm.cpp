@@ -1484,39 +1484,110 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             lhs_type, rhs_type, vlhs, vrhs, create_sint, create_float, create_complex);
     }
 
+    llvm::Value *create_complex_value(TL::Type complex_type, llvm::Value *real, llvm::Value *imag)
+    {
+        llvm::Value *result = llvm::UndefValue::get(llvm_visitor->get_llvm_type(complex_type));
+        result = llvm_visitor->ir_builder->CreateInsertValue(result, real, 0u);
+        result = llvm_visitor->ir_builder->CreateInsertValue(result, imag, 1u);
+        return result;
+    }
+
 #define CREATOR(Creator) [&, this](llvm::Value* lhs, llvm::Value* rhs) { return llvm_visitor->ir_builder->Creator(lhs, rhs); }
 #define INVALID_OP [&, this](llvm::Value* lhs, llvm::Value* rhs) -> llvm::Value* { internal_error("Invalid operation", 0); return nullptr; }
 #define UNIMPLEMENTED_OP [&, this](llvm::Value* lhs, llvm::Value* rhs) -> llvm::Value* { internal_error("Operation not yet implemented", 0); return nullptr; }
     void visit(const Nodecl::Add& node)
     {
+        auto create_complex_add = [&, this](llvm::Value *lhs, llvm::Value *rhs) {
+            // (a, b) + (c, d) = (a + b, c + d)
+            llvm::Value *real_part = llvm_visitor->ir_builder->CreateFAdd(
+                    llvm_visitor->ir_builder->CreateExtractValue(lhs, 0u),
+                    llvm_visitor->ir_builder->CreateExtractValue(rhs, 0u));
+            llvm::Value *imag_part = llvm_visitor->ir_builder->CreateFAdd(
+                    llvm_visitor->ir_builder->CreateExtractValue(lhs, 1u),
+                    llvm_visitor->ir_builder->CreateExtractValue(rhs, 1u));
+            return create_complex_value(node.get_type(), real_part, imag_part);
+        };
+
         arithmetic_binary_operator(node,
                               CREATOR(CreateAdd),
                               CREATOR(CreateFAdd),
-                              UNIMPLEMENTED_OP);
+                              create_complex_add);
     }
 
     void visit(const Nodecl::Minus& node)
     {
+        auto create_complex_sub = [&, this](llvm::Value *lhs, llvm::Value *rhs) {
+            // (a, b) - (c, d) = (a - b, c - d)
+            llvm::Value *real_part = llvm_visitor->ir_builder->CreateFSub(
+                    llvm_visitor->ir_builder->CreateExtractValue(lhs, 0u),
+                    llvm_visitor->ir_builder->CreateExtractValue(rhs, 0u));
+            llvm::Value *imag_part = llvm_visitor->ir_builder->CreateFSub(
+                    llvm_visitor->ir_builder->CreateExtractValue(lhs, 1u),
+                    llvm_visitor->ir_builder->CreateExtractValue(rhs, 1u));
+            return create_complex_value(node.get_type(), real_part, imag_part);
+        };
+
         arithmetic_binary_operator(node,
                               CREATOR(CreateSub),
                               CREATOR(CreateFSub),
-                              UNIMPLEMENTED_OP);
+                              create_complex_sub);
     }
 
     void visit(const Nodecl::Mul& node)
     {
+        auto create_complex_mul = [&, this](llvm::Value *lhs, llvm::Value *rhs) {
+            // (a, b) * (c, d) = (ac - bd, ad + bc)
+            llvm::Value *a = llvm_visitor->ir_builder->CreateExtractValue(lhs, 0u);
+            llvm::Value *b = llvm_visitor->ir_builder->CreateExtractValue(lhs, 1u);
+            llvm::Value *c = llvm_visitor->ir_builder->CreateExtractValue(rhs, 0u);
+            llvm::Value *d = llvm_visitor->ir_builder->CreateExtractValue(rhs, 1u);
+
+            llvm::Value *real_part = llvm_visitor->ir_builder->CreateFSub(
+                llvm_visitor->ir_builder->CreateFMul(a, c),
+                llvm_visitor->ir_builder->CreateFMul(b, d));
+            llvm::Value *imag_part = llvm_visitor->ir_builder->CreateFAdd(
+                llvm_visitor->ir_builder->CreateFMul(a, d),
+                llvm_visitor->ir_builder->CreateFMul(b, c));
+
+            return create_complex_value(node.get_type(), real_part, imag_part);
+        };
+
         arithmetic_binary_operator(node,
                               CREATOR(CreateMul),
                               CREATOR(CreateFMul),
-                              UNIMPLEMENTED_OP);
+                              create_complex_mul);
     }
 
     void visit(const Nodecl::Div& node)
     {
+        auto create_complex_div = [&, this](llvm::Value *lhs, llvm::Value *rhs) {
+            // (a, b) / (c, d) = ((ac + bd) / (c^2 + d^2), (bc - ad) / (c^2 + d^2))
+            llvm::Value *a = llvm_visitor->ir_builder->CreateExtractValue(lhs, 0u);
+            llvm::Value *b = llvm_visitor->ir_builder->CreateExtractValue(lhs, 1u);
+            llvm::Value *c = llvm_visitor->ir_builder->CreateExtractValue(rhs, 0u);
+            llvm::Value *d = llvm_visitor->ir_builder->CreateExtractValue(rhs, 1u);
+
+            llvm::Value *divisor = llvm_visitor->ir_builder->CreateFAdd(
+                    llvm_visitor->ir_builder->CreateFMul(c, c),
+                    llvm_visitor->ir_builder->CreateFMul(d, d));
+
+            llvm::Value *real_part = llvm_visitor->ir_builder->CreateFDiv(
+                    llvm_visitor->ir_builder->CreateFAdd(
+                        llvm_visitor->ir_builder->CreateFMul(a, c),
+                        llvm_visitor->ir_builder->CreateFMul(b, d)),
+                    divisor);
+            llvm::Value *imag_part = llvm_visitor->ir_builder->CreateFDiv(
+                    llvm_visitor->ir_builder->CreateFSub(
+                        llvm_visitor->ir_builder->CreateFMul(b, c),
+                        llvm_visitor->ir_builder->CreateFMul(a, d)),
+                    divisor);
+
+            return create_complex_value(node.get_type(), real_part, imag_part);
+        };
         arithmetic_binary_operator(node,
                               CREATOR(CreateSDiv),
                               CREATOR(CreateFDiv),
-                              UNIMPLEMENTED_OP);
+                              create_complex_div);
     }
 
     void visit(const Nodecl::Power& node)
