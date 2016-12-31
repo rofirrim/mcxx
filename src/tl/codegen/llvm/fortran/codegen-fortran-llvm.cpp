@@ -561,6 +561,17 @@ void FortranLLVM::visit(const Nodecl::ForStatement& node)
     else
         vstep = eval_expression(step);
 
+    llvm::Value *vsign = nullptr;
+    if (!constant_step)
+    {   
+        llvm::Value *vsign_check = ir_builder->CreateICmpSLT(
+                vstep, get_integer_value(0, ind_var.get_symbol().get_type()));
+        vsign = ir_builder->CreateSelect(vsign_check,
+                get_integer_value(-1, ind_var.get_symbol().get_type()),
+                get_integer_value(1, ind_var.get_symbol().get_type()));
+    }
+
+
     ir_builder->CreateStore(vstart, vind_var);
 
     llvm::BasicBlock *block_check = llvm::BasicBlock::Create(
@@ -592,12 +603,6 @@ void FortranLLVM::visit(const Nodecl::ForStatement& node)
         // I'm aware that replicating the loop could be more efficient but for now this will do
         // i * S <= U * S (i.e. if S < 0 then this is i * |S| >= U * |S|)
         // Here S will be the sign of the step (i.e. 1 or -1)
-        llvm::Value *vsign_check = ir_builder->CreateICmpSLT(
-                vstep, get_integer_value(0, ind_var.get_symbol().get_type()));
-        llvm::Value *vsign = ir_builder->CreateSelect(vsign_check,
-            get_integer_value(-1, ind_var.get_symbol().get_type()),
-            get_integer_value(1, ind_var.get_symbol().get_type()));
-
         vcheck = ir_builder->CreateICmpSLE(
                 ir_builder->CreateMul(ir_builder->CreateLoad(vind_var), vsign),
                 ir_builder->CreateMul(vend, vsign));
@@ -1462,7 +1467,130 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                               CREATOR(CreateFDiv));
     }
 
-    // void visit(const Nodecl::Power& node);
+    void visit(const Nodecl::Power& node)
+    {
+        // We use exponentiation by squaring
+        // a ** b is either   a ** (2 * b) == (a*a) ** b
+        //           or       a ** (2 * b + 1) == a * (a*a) ** b 
+        auto create_pow_int = [&, this](llvm::Value* lhs, llvm::Value *rhs) {
+            llvm::BasicBlock *pow_loop_check = llvm::BasicBlock::Create(
+                    llvm_visitor->llvm_context, "pow.loop.check", llvm_visitor->get_current_function());
+            llvm::BasicBlock *pow_loop_body = llvm::BasicBlock::Create(
+                    llvm_visitor->llvm_context, "pow.loop.body", llvm_visitor->get_current_function());
+            llvm::BasicBlock *pow_loop_body_odd = llvm::BasicBlock::Create(
+                    llvm_visitor->llvm_context, "pow.loop.body.odd", llvm_visitor->get_current_function());
+            llvm::BasicBlock *pow_loop_body_common = llvm::BasicBlock::Create(
+                    llvm_visitor->llvm_context, "pow.loop.body.common", llvm_visitor->get_current_function());
+            llvm::BasicBlock *pow_loop_end = llvm::BasicBlock::Create(
+                    llvm_visitor->llvm_context, "pow.loop.end", llvm_visitor->get_current_function());
+            llvm::BasicBlock *pow_if_neg = llvm::BasicBlock::Create(
+                    llvm_visitor->llvm_context, "pow.if.neg", llvm_visitor->get_current_function());
+            llvm::BasicBlock *pow_if_end = llvm::BasicBlock::Create(
+                    llvm_visitor->llvm_context, "pow.if.end", llvm_visitor->get_current_function());
+
+            llvm::Value *result = llvm_visitor->ir_builder->CreateAlloca(llvm_visitor->get_llvm_type(node.get_type()));
+            llvm::Value *base = llvm_visitor->ir_builder->CreateAlloca(llvm_visitor->get_llvm_type(node.get_type()));
+            llvm::Value *exponent = llvm_visitor->ir_builder->CreateAlloca(llvm_visitor->get_llvm_type(node.get_type()));
+
+            // rhs < 0
+            llvm::Value *negative_exponent = llvm_visitor->ir_builder->CreateICmpSLT(rhs, 
+                    llvm_visitor->get_integer_value(0, node.get_type()));
+
+            // result <- 1
+            llvm_visitor->ir_builder->CreateStore(
+                    llvm_visitor->get_integer_value(1, node.get_type()),
+                    result);
+            // base <- lhs
+            llvm_visitor->ir_builder->CreateStore(
+                    lhs,
+                    base);
+            // exponent <- |rhs|
+            llvm_visitor->ir_builder->CreateStore(
+                    llvm_visitor->ir_builder->CreateSelect(
+                        negative_exponent,
+                        llvm_visitor->ir_builder->CreateSub(
+                            llvm_visitor->get_integer_value(0, node.get_type()),
+                            rhs),
+                        rhs),
+                    exponent);
+
+            llvm_visitor->ir_builder->CreateBr(pow_loop_check);
+
+            llvm_visitor->set_current_block(pow_loop_check);
+            // exponent != 0 
+            llvm::Value *cond_val = llvm_visitor->ir_builder->CreateICmpNE(
+                    llvm_visitor->ir_builder->CreateLoad(exponent),
+                    llvm_visitor->get_integer_value(0, node.get_type()));
+            llvm_visitor->ir_builder->CreateCondBr(cond_val, pow_loop_body, pow_loop_end);
+
+            llvm_visitor->set_current_block(pow_loop_body);
+            // exponent % 2
+            cond_val = llvm_visitor->ir_builder->CreateZExtOrTrunc(
+                    llvm_visitor->ir_builder->CreateSRem(
+                        llvm_visitor->ir_builder->CreateLoad(exponent),
+                        llvm_visitor->get_integer_value(2, node.get_type())),
+                    llvm_visitor->llvm_types.i1);
+            llvm_visitor->ir_builder->CreateCondBr(cond_val, pow_loop_body_odd, pow_loop_body_common);
+
+            // exponent % 2 == 1
+            llvm_visitor->set_current_block(pow_loop_body_odd);
+            // result <- result * base
+            llvm_visitor->ir_builder->CreateStore(
+                    llvm_visitor->ir_builder->CreateMul(
+                        llvm_visitor->ir_builder->CreateLoad(result),
+                        llvm_visitor->ir_builder->CreateLoad(base)),
+                    result);
+            llvm_visitor->ir_builder->CreateBr(pow_loop_body_common);
+
+            // Common case
+            llvm_visitor->set_current_block(pow_loop_body_common);
+            // exponent <- exponent / 2
+            llvm_visitor->ir_builder->CreateStore(
+                    llvm_visitor->ir_builder->CreateSDiv(
+                        llvm_visitor->ir_builder->CreateLoad(exponent),
+                        llvm_visitor->get_integer_value(2, node.get_type())),
+                    exponent);
+            // base <- base * base
+            llvm::Value *base_load = llvm_visitor->ir_builder->CreateLoad(base);
+            llvm_visitor->ir_builder->CreateStore(
+                    llvm_visitor->ir_builder->CreateMul(
+                        base_load,
+                        base_load),
+                    base);
+
+            llvm_visitor->ir_builder->CreateBr(pow_loop_check);
+
+            llvm_visitor->set_current_block(pow_loop_end);
+            llvm_visitor->ir_builder->CreateCondBr(negative_exponent,
+                pow_if_neg,
+                pow_if_end);
+
+            // If exponent was negative A ** (-B) is the same as 1 / (A ** B)
+            llvm_visitor->set_current_block(pow_if_neg);
+            llvm_visitor->ir_builder->CreateStore(
+                llvm_visitor->ir_builder->CreateSDiv(
+                    llvm_visitor->get_integer_value(1, node.get_type()),
+                    llvm_visitor->ir_builder->CreateLoad(result)),
+                result);
+            llvm_visitor->ir_builder->CreateBr(pow_if_end);
+
+            llvm_visitor->set_current_block(pow_if_end);
+            return llvm_visitor->ir_builder->CreateLoad(result);
+        };
+
+        auto create_pow_float = [&, this](llvm::Value* lhs, llvm::Value *rhs) {
+            llvm::Function *powf = llvm::Intrinsic::getDeclaration(
+                    llvm_visitor->current_module.get(),
+                    llvm::Intrinsic::pow,
+                    {lhs->getType(), rhs->getType()});
+            ERROR_CONDITION(powf == nullptr, "llvm.pow not found?", 0);
+            return llvm_visitor->ir_builder->CreateCall(powf, {lhs, rhs});
+        };
+
+        arithmetic_binary_operator(node,
+                create_pow_int,
+                create_pow_float);
+    }
 
     template <typename Node, typename CreateSInt, typename CreateFloat>
     void arithmetic_binary_comparison(const Node node,
