@@ -1496,40 +1496,18 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 #define UNIMPLEMENTED_OP [&, this](llvm::Value* lhs, llvm::Value* rhs) -> llvm::Value* { internal_error("Operation not yet implemented", 0); return nullptr; }
     void visit(const Nodecl::Add& node)
     {
-        auto create_complex_add = [&, this](llvm::Value *lhs, llvm::Value *rhs) {
-            // (a, b) + (c, d) = (a + b, c + d)
-            llvm::Value *real_part = llvm_visitor->ir_builder->CreateFAdd(
-                    llvm_visitor->ir_builder->CreateExtractElement(lhs, uint64_t(0)),
-                    llvm_visitor->ir_builder->CreateExtractElement(rhs, uint64_t(0)));
-            llvm::Value *imag_part = llvm_visitor->ir_builder->CreateFAdd(
-                    llvm_visitor->ir_builder->CreateExtractElement(lhs, 1),
-                    llvm_visitor->ir_builder->CreateExtractElement(rhs, 1));
-            return create_complex_value(node.get_type(), real_part, imag_part);
-        };
-
         arithmetic_binary_operator(node,
                               CREATOR(CreateAdd),
                               CREATOR(CreateFAdd),
-                              create_complex_add);
+                              CREATOR(CreateFAdd));
     }
 
     void visit(const Nodecl::Minus& node)
     {
-        auto create_complex_sub = [&, this](llvm::Value *lhs, llvm::Value *rhs) {
-            // (a, b) - (c, d) = (a - b, c - d)
-            llvm::Value *real_part = llvm_visitor->ir_builder->CreateFSub(
-                    llvm_visitor->ir_builder->CreateExtractElement(lhs, uint64_t(0)),
-                    llvm_visitor->ir_builder->CreateExtractElement(rhs, uint64_t(0)));
-            llvm::Value *imag_part = llvm_visitor->ir_builder->CreateFSub(
-                    llvm_visitor->ir_builder->CreateExtractElement(lhs, 1),
-                    llvm_visitor->ir_builder->CreateExtractElement(rhs, 1));
-            return create_complex_value(node.get_type(), real_part, imag_part);
-        };
-
         arithmetic_binary_operator(node,
                               CREATOR(CreateSub),
                               CREATOR(CreateFSub),
-                              create_complex_sub);
+                              CREATOR(CreateFSub));
     }
 
     void visit(const Nodecl::Mul& node)
