@@ -860,7 +860,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         TL::Type lhs_type = node.get_lhs().get_type();
         TL::Type rhs_type = node.get_rhs().get_type();
 
-        if (lhs_type.no_ref().is_array() && rhs_type.is_array())
+        if (lhs_type.no_ref().is_fortran_array() && rhs_type.is_fortran_array())
         {
             lhs_type = lhs_type.no_ref();
             if (!lhs_type.array_is_vla()
@@ -889,7 +889,55 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         }
         else if (!lhs_type.no_ref().is_array() && !rhs_type.is_array())
         {
-            value = llvm_visitor->ir_builder->CreateStore(vrhs, vlhs);
+                // A scalar assignment
+                value = llvm_visitor->ir_builder->CreateStore(vrhs, vlhs);
+        }
+        else if (fortran_is_character_type(lhs_type.no_ref().get_internal_type())
+                && fortran_is_character_type(rhs_type.no_ref().get_internal_type()))
+        {
+            // A CHARACTER assignment
+            // Fortran is a bit special in that its strings are padded with blanks
+            // so we will copy the characters from rhs and then fill whatever remains
+            // with blanks
+
+            // FIXME - What about substrings?
+
+            // Compute the minimum length of characters to transfer from rhs to lhs
+            llvm::Value *size_lhs = llvm_visitor->evaluate_size_of_array(lhs_type.no_ref());
+            llvm::Value *size_rhs = llvm_visitor->evaluate_size_of_array(rhs_type);
+
+            llvm::Value *min_size = llvm_visitor->ir_builder->CreateSelect(
+                llvm_visitor->ir_builder->CreateICmpSLT(size_lhs, size_rhs),
+                size_lhs, size_rhs);
+            
+            // FIXME: CHARACTER(LEN=*) :: C should be handled like a VLA
+            llvm::Value *lhs_addr = llvm_visitor->ir_builder->CreateGEP(
+                vlhs, { llvm_visitor->get_integer_value_32(0), llvm_visitor->get_integer_value_64(0) });
+            llvm::Value *rhs_addr = vrhs;
+
+            llvm_visitor->ir_builder->CreateMemCpy(
+                lhs_addr,
+                rhs_addr,
+                min_size,
+                1);
+
+            llvm::Value *diff = llvm_visitor->ir_builder->CreateSub(size_lhs, size_rhs);
+            diff = llvm_visitor->ir_builder->CreateSelect(
+                llvm_visitor->ir_builder->CreateICmpSLT(diff, llvm_visitor->get_integer_value_64(0)),
+                llvm_visitor->get_integer_value_64(0), diff);
+
+            llvm::Value *lhs_offset = llvm_visitor->ir_builder->CreateGEP(
+                vlhs, { llvm_visitor->get_integer_value_64(0), min_size });
+
+            llvm::Value *pad_len = llvm_visitor->ir_builder->CreateSub(size_lhs, min_size);
+
+            llvm_visitor->ir_builder->CreateMemSet(
+                lhs_offset,
+                llvm_visitor->get_integer_value_N(' ', llvm_visitor->llvm_types.i8, 8),
+                pad_len,
+                1);
+
+            value = vlhs;
         }
         else
         {
@@ -2248,6 +2296,10 @@ llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
     {
         return llvm_types.f64;
     }
+    else if (t.is_char())
+    {
+        return llvm_types.i8;
+    }
     else if (t.is_void())
     {
         return llvm_types.void_;
@@ -2328,6 +2380,11 @@ llvm::DIType *FortranLLVM::get_debug_info_type(TL::Type t)
     else if (t.is_double())
     {
         return dbg_builder->createBasicType("REAL(KIND=8)", 64, llvm::dwarf::DW_ATE_float);
+    }
+    else if (t.is_char())
+    {   
+        // Should we honor platform dependent signedness?
+        return dbg_builder->createBasicType("CHARACTER", 8, llvm::dwarf::DW_ATE_signed_char);
     }
     else if (t.is_void())
     {
@@ -2578,6 +2635,8 @@ void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
         if (fortran_is_character_type(t.get_internal_type()))
         {
             llvm::Value *expr = eval_expression(n);
+
+            expr = ir_builder->CreatePointerCast(expr, llvm_types.ptr_i8);
 
             ir_builder->CreateCall(gfortran_rt.transfer_character_write.get(),
                                    { dt_parm, expr, eval_sizeof(n) });
