@@ -159,7 +159,6 @@ void FortranLLVM::visit(const Nodecl::TopLevel &node)
     llvm::raw_os_ostream ros(*file);
     current_module->print(ros,
                           /* AssemblyAnnotationWriter */ nullptr);
-    // current_module->dump();
 
     std::swap(old_module, current_module);
 }
@@ -183,7 +182,7 @@ class FortranVisitorLLVMEmitVariables : public Nodecl::ExhaustiveVisitor<void>
             // Check boundaries of arrays first in case
             // they require a symbol not yet seen
             TL::Type t = sym.get_type().no_ref();
-            while (t.is_array())
+            while (t.is_fortran_array())
             {
                 Nodecl::NodeclBase lower, upper;
                 t.array_get_bounds(lower, upper);
@@ -191,6 +190,11 @@ class FortranVisitorLLVMEmitVariables : public Nodecl::ExhaustiveVisitor<void>
                 walk(upper);
                 t = t.array_element();
             }
+
+            // TODO: CHARACTER(LEN=*)
+            // if (t.is_fortran_character())
+            // {
+            // }
 
             // Saved expressions are symbols that will likely
             // require other symbols
@@ -335,7 +339,7 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
         llvm::Value *v = &*llvm_fun_args_it;
         TL::Symbol s = *related_symbols_it;
 
-        if (!s.get_type().no_ref().is_array()
+        if (!s.get_type().no_ref().is_fortran_array()
                 && !s.get_type().is_any_reference())
         {
             // VALUE dummy argument
@@ -348,7 +352,7 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
             // We allow OPTIONAL be NULL (I think implementing OPTIONAL this way violates the standard)
             llvm::AttributeSet attrs = fun->getAttributes();
             attrs = attrs.addAttribute(llvm_context, dbg_argno, llvm::Attribute::NonNull);
-            if (!s.get_type().no_ref().is_array())
+            if (!s.get_type().no_ref().is_fortran_array())
                 attrs = attrs.addAttribute(llvm_context, {(unsigned)dbg_argno},
                         llvm::Attribute::get(llvm_context,
                             llvm::Attribute::Dereferenceable, 
@@ -620,6 +624,33 @@ void FortranLLVM::visit(const Nodecl::ForStatement& node)
     set_current_block(block_end);
 }
 
+void FortranLLVM::visit(const Nodecl::WhileStatement& node)
+{
+    TrackLocation loc(this, node.get_locus());
+    llvm::BasicBlock *while_check = llvm::BasicBlock::Create(
+        llvm_context, "while.check", get_current_function());
+    llvm::BasicBlock *while_body = llvm::BasicBlock::Create(
+        llvm_context, "while.body", get_current_function());
+    llvm::BasicBlock *while_end = llvm::BasicBlock::Create(
+        llvm_context, "while.end", get_current_function());
+
+    ir_builder->CreateBr(while_check);
+
+    set_current_block(while_check);
+    llvm::Value *check = eval_expression(node.get_condition());
+    ir_builder->CreateCondBr(
+        ir_builder->CreateZExtOrTrunc(check, llvm_types.i1),
+        while_body,
+        while_end);
+
+    set_current_block(while_body);
+    walk(node.get_statement());
+
+    ir_builder->CreateBr(while_check);
+
+    set_current_block(while_end);
+}
+
 class FortranVisitorLLVMExpressionBase : public Nodecl::NodeclVisitor<void>
 {
   protected:
@@ -658,7 +689,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
     llvm::Value *scalar_conversion(TL::Type dest, TL::Type orig, llvm::Value* value_nest)
     {
-        ERROR_CONDITION(dest.no_ref().is_array(), "Invalid type", 0);
+        ERROR_CONDITION(dest.no_ref().is_fortran_array(), "Invalid type", 0);
         TL::Type real_dest = dest;
         TL::Type real_orig = orig;
 
@@ -736,8 +767,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
         llvm::Value *nest_value = llvm_visitor->eval_expression(node.get_nest());
 
-        if (dest.is_array()
-                && orig.no_ref().is_array())
+        if (dest.is_fortran_array()
+                && orig.no_ref().is_fortran_array())
         {
             // We do not represent values of array, so we let the address pass-through
             // FIXME: Arrays with region that are demoted to non-region arrays
@@ -747,8 +778,15 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 0);
             value = nest_value;
         }
-        else if (dest.is_array()
-                && !orig.no_ref().is_array())
+        else if (dest.is_fortran_character()
+            && orig.is_any_reference()
+            && orig.no_ref().is_fortran_character())
+        {
+            // We do not represent values of array, so we let the address pass-through
+            value = nest_value;
+        }
+        else if (dest.is_fortran_array()
+                && !orig.no_ref().is_fortran_array())
         {
             value = scalar_conversion(dest.array_base_element(), orig, nest_value);
         }
@@ -760,8 +798,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
     bool is_scalar_to_array(const Nodecl::NodeclBase &n)
     {
-        return n.get_type().is_array()
-               && !n.no_conv().get_type().no_ref().is_array();
+        return n.get_type().is_fortran_array()
+               && !n.no_conv().get_type().no_ref().is_fortran_array();
     }
 
     llvm::Value *add_offset_to_address(llvm::Value *base, llvm::Value *offset)
@@ -793,7 +831,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 llvm::Value *dim_idx_value = llvm_visitor->ir_builder->CreateLoad(dim_idx, "array_op_idx.val");
 
                 // The rank of both arrays is the same, so checking either should do
-                if (!lhs_type.array_element().is_array())
+                if (!lhs_type.array_element().is_fortran_array())
                 {
                     // We are now at the elemental level
 
@@ -887,57 +925,65 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 value = vlhs;
             }
         }
-        else if (!lhs_type.no_ref().is_array() && !rhs_type.is_array())
+        else if (!lhs_type.no_ref().is_fortran_array()
+                    && !rhs_type.is_fortran_array())
         {
-                // A scalar assignment
+            // A scalar assignment
+            if (!lhs_type.no_ref().is_fortran_character()
+                    && !rhs_type.no_ref().is_fortran_character())
+            {
+                // A very simple scalar assignment
                 value = llvm_visitor->ir_builder->CreateStore(vrhs, vlhs);
-        }
-        else if (fortran_is_character_type(lhs_type.no_ref().get_internal_type())
-                && fortran_is_character_type(rhs_type.no_ref().get_internal_type()))
-        {
-            // A CHARACTER assignment
-            // Fortran is a bit special in that its strings are padded with blanks
-            // so we will copy the characters from rhs and then fill whatever remains
-            // with blanks
+            }
+            else if (lhs_type.no_ref().is_fortran_character()
+                    && rhs_type.no_ref().is_fortran_character())
+            {
+                // A CHARACTER assignment
+                // Fortran is a bit special in that its strings are padded with blanks
+                // so we will copy the characters from rhs and then fill whatever remains
+                // with blanks
 
-            // FIXME - What about substrings?
+                // FIXME - What about substrings?
 
-            // Compute the minimum length of characters to transfer from rhs to lhs
-            llvm::Value *size_lhs = llvm_visitor->evaluate_size_of_array(lhs_type.no_ref());
-            llvm::Value *size_rhs = llvm_visitor->evaluate_size_of_array(rhs_type);
+                // Compute the minimum length of characters to transfer from rhs to lhs
+                llvm::Value *size_lhs = llvm_visitor->evaluate_length_of_character(lhs_type.no_ref());
+                llvm::Value *size_rhs = llvm_visitor->evaluate_length_of_character(rhs_type);
 
-            llvm::Value *min_size = llvm_visitor->ir_builder->CreateSelect(
-                llvm_visitor->ir_builder->CreateICmpSLT(size_lhs, size_rhs),
-                size_lhs, size_rhs);
-            
-            // FIXME: CHARACTER(LEN=*) :: C should be handled like a VLA
-            llvm::Value *lhs_addr = llvm_visitor->ir_builder->CreateGEP(
-                vlhs, { llvm_visitor->get_integer_value_32(0), llvm_visitor->get_integer_value_64(0) });
-            llvm::Value *rhs_addr = vrhs;
+                llvm::Value *min_size = llvm_visitor->ir_builder->CreateSelect(
+                        llvm_visitor->ir_builder->CreateICmpSLT(size_lhs, size_rhs),
+                        size_lhs, size_rhs);
 
-            llvm_visitor->ir_builder->CreateMemCpy(
-                lhs_addr,
-                rhs_addr,
-                min_size,
-                1);
+                // FIXME: CHARACTER(LEN=*) :: C should be handled like a VLA
+                llvm::Value *lhs_addr = llvm_visitor->ir_builder->CreateGEP(
+                        vlhs, { llvm_visitor->get_integer_value_32(0), llvm_visitor->get_integer_value_64(0) });
+                llvm::Value *rhs_addr = vrhs;
 
-            llvm::Value *diff = llvm_visitor->ir_builder->CreateSub(size_lhs, size_rhs);
-            diff = llvm_visitor->ir_builder->CreateSelect(
-                llvm_visitor->ir_builder->CreateICmpSLT(diff, llvm_visitor->get_integer_value_64(0)),
-                llvm_visitor->get_integer_value_64(0), diff);
+                llvm_visitor->ir_builder->CreateMemCpy(
+                        lhs_addr,
+                        rhs_addr,
+                        min_size,
+                        1);
 
-            llvm::Value *lhs_offset = llvm_visitor->ir_builder->CreateGEP(
-                vlhs, { llvm_visitor->get_integer_value_64(0), min_size });
+                llvm::Value *diff = llvm_visitor->ir_builder->CreateSub(size_lhs, size_rhs);
+                diff = llvm_visitor->ir_builder->CreateSelect(
+                        llvm_visitor->ir_builder->CreateICmpSLT(diff, llvm_visitor->get_integer_value_64(0)),
+                        llvm_visitor->get_integer_value_64(0), diff);
 
-            llvm::Value *pad_len = llvm_visitor->ir_builder->CreateSub(size_lhs, min_size);
+                llvm::Value *lhs_offset = llvm_visitor->ir_builder->CreateGEP(
+                        vlhs, { llvm_visitor->get_integer_value_64(0), min_size });
 
-            llvm_visitor->ir_builder->CreateMemSet(
-                lhs_offset,
-                llvm_visitor->get_integer_value_N(' ', llvm_visitor->llvm_types.i8, 8),
-                pad_len,
-                1);
+                llvm::Value *pad_len = llvm_visitor->ir_builder->CreateSub(size_lhs, min_size);
 
-            value = vlhs;
+                llvm_visitor->ir_builder->CreateMemSet(
+                        lhs_offset,
+                        llvm_visitor->get_integer_value_N(' ', llvm_visitor->llvm_types.i8, 8),
+                        pad_len,
+                        1);
+
+                value = vlhs;
+            }
+            else
+                internal_error("Code unreachable", 0);
         }
         else
         {
@@ -1130,7 +1176,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
     llvm::Value *compute_offset_from_linear_element(TL::Type t, llvm::Value* idx_value)
     {
-        ERROR_CONDITION(!t.is_array(), "Invalid type", 0);
+        ERROR_CONDITION(!t.is_fortran_array(), "Invalid type", 0);
 
         TL::Type element_type = t.array_element();
         llvm::Value *element_size_bytes
@@ -1276,6 +1322,9 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                                                llvm::Value *result_idx_addr,
                                                Create create)
     {
+        // Here basically we loop elements of each dimension. Since the loop has been
+        // linearized 
+
         // FIXME - Use the easiest of the two to compute
         llvm::Value *dim_idx = llvm_visitor->ir_builder->CreateAlloca(llvm_visitor->llvm_types.i64);
         llvm::Value *dim_size = llvm_visitor->evaluate_elements_of_dimension(lhs_type);
@@ -1288,7 +1337,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 llvm::Value *dim_idx_value = llvm_visitor->ir_builder->CreateLoad(dim_idx);
 
                 // The rank of both arrays is the same, so checking either should do
-                if (!lhs_type.array_element().is_array())
+                if (!lhs_type.array_element().is_fortran_array())
                 {
                     // We are now at the elemental level
 
@@ -1398,6 +1447,9 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                                           const Nodecl::NodeclBase &rhs,
                                           Create create)
     {
+        // This is very naively implemented: basically we allocate an array big
+        // enough for the result and then we iterate the elements of the operands.
+
         TL::Type lhs_type = lhs.get_type();
         TL::Type rhs_type = rhs.get_type();
 
@@ -1412,7 +1464,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         llvm::Value *array_size
             = llvm_visitor->evaluate_elements_of_array(lhs_type);
 
-        // Evaluate addresses
+        // As these are array operands, their LLVM  values will be addresses
+        // to the first element.
         llvm::Value *lhs_addr = llvm_visitor->eval_expression(lhs);
         llvm::Value *rhs_addr = llvm_visitor->eval_expression(rhs);
 
@@ -1420,12 +1473,13 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         llvm::Value *result_addr = llvm_visitor->ir_builder->CreateAlloca(
             llvm_visitor->get_llvm_type(lhs_element_type), array_size);
 
-        // Index inside the contiguous result array
+        // Index inside the contiguous result array. This is used for looping.
         llvm::Value *result_idx_addr = llvm_visitor->ir_builder->CreateAlloca(
             llvm_visitor->llvm_types.i64);
         llvm_visitor->ir_builder->CreateStore(
             llvm_visitor->get_integer_value_64(0), result_idx_addr);
 
+        // Loop dimensions
         arithmetic_binary_operator_array_loop(lhs,
                                               rhs,
                                               lhs_type,
@@ -1436,6 +1490,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                                               result_idx_addr,
                                               create);
 
+        // The result array is an address in LLVM world.
         value = result_addr;
     }
 
@@ -1461,35 +1516,16 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         TL::Type lhs_type = lhs.get_type();
         TL::Type rhs_type = rhs.get_type();
 
-        if (lhs_type.is_array() || rhs_type.is_array())
+        if (lhs_type.is_fortran_array() || rhs_type.is_fortran_array())
         {
-            if (lhs_type.is_array() == rhs_type.is_array())
-            {
-                if (!lhs_type.array_is_vla()
-                    && !lhs_type.array_is_region()
-                    && !lhs_type.array_requires_descriptor()
-                    && !rhs_type.array_is_vla()
-                    && !rhs_type.array_is_region()
-                    && !rhs_type.array_requires_descriptor())
-                {
-                    // If both are statically sized arrays we use LLVM IR
-                    // feature of array-wise operations
-                    lhs_type = lhs_type.array_base_element();
-                    rhs_type = rhs_type.array_base_element();
-                    // FALL-THROUGH
-                }
-                else
-                {
-                    return arithmetic_binary_operator_array(
+            if (lhs_type.is_fortran_array() == rhs_type.is_fortran_array())
+                return arithmetic_binary_operator_array(
                         lhs, rhs, create);
-                }
-            }
             else
-            {
                 internal_error("Code unreachable. Inconsistent types in operators", 0);
-            }
         }
 
+        // A scalar intrinsic binary operation
         llvm::Value *vlhs = llvm_visitor->eval_expression(lhs);
         llvm::Value *vrhs = llvm_visitor->eval_expression(rhs);
 
@@ -1518,7 +1554,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
            BinaryOpCreator create_complex)
     {
         t = t.no_ref();
-        if (t.is_array())
+        if (t.is_fortran_array())
             t = t.array_base_element();
         if (t.is_signed_integral())
             return create_integer;
@@ -1769,7 +1805,22 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                                       CreateFloat create_float,
                                       CreateComplex create_complex)
     {
-        arithmetic_binary_operator(node, create_sint, create_float, create_complex);
+        TL::Type lhs_type = node.get_lhs().get_type().no_ref();
+        TL::Type rhs_type = node.get_rhs().get_type().no_ref();
+
+        BinaryOpCreator create;
+        if (lhs_type.is_signed_integral() && rhs_type.is_signed_integral())
+            create = create_sint;
+        else if (lhs_type.is_floating_type() && rhs_type.is_floating_type())
+            create = create_float;
+        else if (lhs_type.is_complex() && rhs_type.is_complex())
+            create = create_complex;
+        else
+            internal_error("Unexpected type '%s' and '%s' for arithmetic binary relational operator\n",
+                    print_declarator(lhs_type.get_internal_type()),
+                    print_declarator(rhs_type.get_internal_type()));
+
+        binary_operator(node, create);
 
         // Make sure the logical value stays in the proper integer size
         // and not just i1.
@@ -1813,18 +1864,50 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
     void visit(const Nodecl::Equal &node)
     {
+        auto creator_complex = [&, this](Nodecl::NodeclBase,
+            Nodecl::NodeclBase,
+            llvm::Value *lhs,
+            llvm::Value *rhs) -> llvm::Value*
+        {
+            llvm::Value *lhs_real = llvm_visitor->ir_builder->CreateExtractElement(lhs, uint64_t(0));
+            llvm::Value *lhs_imag = llvm_visitor->ir_builder->CreateExtractElement(lhs, uint64_t(1));
+
+            llvm::Value *rhs_real = llvm_visitor->ir_builder->CreateExtractElement(rhs, uint64_t(0));
+            llvm::Value *rhs_imag = llvm_visitor->ir_builder->CreateExtractElement(rhs, uint64_t(1));
+
+            return llvm_visitor->ir_builder->CreateSelect(llvm_visitor->ir_builder->CreateFCmpOEQ(lhs_real, rhs_real),
+                    llvm_visitor->ir_builder->CreateFCmpOEQ(lhs_imag, rhs_imag),
+                    llvm_visitor->get_integer_value_N(0, llvm_visitor->llvm_types.i1, 1));
+        };
+
         arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpEQ),
                               CREATOR(CreateFCmpOEQ),
-                              UNIMPLEMENTED_OP);
+                              creator_complex);
     }
 
     void visit(const Nodecl::Different &node)
     {
+        auto creator_complex = [&, this](Nodecl::NodeclBase,
+            Nodecl::NodeclBase,
+            llvm::Value *lhs,
+            llvm::Value *rhs) -> llvm::Value*
+        {
+            llvm::Value *lhs_real = llvm_visitor->ir_builder->CreateExtractElement(lhs, uint64_t(0));
+            llvm::Value *lhs_imag = llvm_visitor->ir_builder->CreateExtractElement(lhs, uint64_t(1));
+
+            llvm::Value *rhs_real = llvm_visitor->ir_builder->CreateExtractElement(rhs, uint64_t(0));
+            llvm::Value *rhs_imag = llvm_visitor->ir_builder->CreateExtractElement(rhs, uint64_t(1));
+
+            return llvm_visitor->ir_builder->CreateSelect(llvm_visitor->ir_builder->CreateFCmpONE(lhs_real, rhs_real),
+                    llvm_visitor->ir_builder->CreateFCmpONE(lhs_imag, rhs_imag),
+                    llvm_visitor->get_integer_value_N(0, llvm_visitor->llvm_types.i1, 1));
+        };
+
         arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpNE),
                               CREATOR(CreateFCmpONE),
-                              UNIMPLEMENTED_OP);
+                              creator_complex);
     }
 #undef CREATOR
 #undef UNIMPLEMENTED_OP
@@ -1839,13 +1922,13 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 lhs_type = lhs_type.array_element();
 
             // TODO - CHARACTER(LEN=*) is special as it uses a hidden parameter
-            llvm::Value *lhs_elements = llvm_visitor->evaluate_size_of_array(lhs_type);
+            llvm::Value *lhs_elements = llvm_visitor->evaluate_length_of_character(lhs_type);
 
             TL::Type rhs_type = rhs.get_type();
             while (rhs_type.is_fortran_array())
                 rhs_type = rhs_type.array_element();
 
-            llvm::Value *rhs_elements = llvm_visitor->evaluate_size_of_array(rhs_type);
+            llvm::Value *rhs_elements = llvm_visitor->evaluate_length_of_character(rhs_type);
 
             llvm::Value *total_elements = llvm_visitor->ir_builder->CreateAdd(lhs_elements, rhs_elements);
 
@@ -1937,14 +2020,15 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         TL::Type subscripted_type = subscripted.get_type();
         TL::Type subscripted_type_noref = subscripted_type.no_ref();
 
+        // TODO: Substrings use thise node too
         ERROR_CONDITION(
-            !subscripted_type_noref.is_array(), "Expecting an array here", 0);
+            !subscripted_type_noref.is_fortran_array(), "Expecting an array here", 0);
 
         if (subscripted_type_noref.array_requires_descriptor())
         {
             internal_error("Not yet implemented", 0);
         }
-        else if (node.get_type().no_ref().is_array()
+        else if (node.get_type().no_ref().is_fortran_array()
                 && node.get_type().no_ref().array_is_region())
         {
             llvm::Value *subscripted_val
@@ -2038,7 +2122,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                                 "Lists do not match", 0);
 
                 // Now multiply by the size of the type to get an offset in bytes
-                ERROR_CONDITION(current_array_type.is_array(), "Should not be an array here", 0);
+                ERROR_CONDITION(current_array_type.is_fortran_array(), "Should not be an array here", 0);
                 val_addr = llvm_visitor->ir_builder->CreateMul(val_addr, llvm_visitor->eval_sizeof_64(current_array_type));
 
                 // And add this offset in bytes to the base
@@ -2151,7 +2235,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             else
             {
                 varg = llvm_visitor->eval_expression(arg);
-                if (it_param->no_ref().is_array())
+                if (it_param->no_ref().is_fortran_array())
                 {
                     TL::Type array_type = it_param->no_ref();
                     if (array_type.array_is_vla())
@@ -2276,7 +2360,7 @@ llvm::Value *FortranLLVM::eval_sizeof_64(Nodecl::NodeclBase n)
 
 llvm::Value *FortranLLVM::eval_sizeof_64(TL::Type t)
 {
-    if (t.is_array())
+    if (t.is_fortran_array())
     {
         return ir_builder->CreateMul(evaluate_size_of_array(t),
                                      eval_sizeof_64(t.array_base_element()));
@@ -2350,7 +2434,7 @@ llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
         // tuple: real, imag
         return llvm::VectorType::get(base_type, 2);
     }
-    else if (t.is_array()
+    else if (t.is_fortran_array()
             && !t.array_requires_descriptor()
             && !t.array_is_vla())
     {
@@ -2361,7 +2445,16 @@ llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
         return llvm::ArrayType::get(get_llvm_type(t.array_element()),
                                     const_value_cast_to_8(size.get_constant()));
     }
-    else if (t.is_array()
+    else if (t.is_fortran_character())
+    {
+        // FIXME - CHARACTER(LEN=*)
+        Nodecl::NodeclBase size = t.array_get_size();
+        ERROR_CONDITION(!size.is_constant(), "Invalid size", 0);
+
+        return llvm::ArrayType::get(get_llvm_type(t.array_element()),
+                                    const_value_cast_to_8(size.get_constant()));
+    }
+    else if (t.is_fortran_array()
             && t.array_is_vla())
     {
         // Use the base element type
@@ -2440,7 +2533,7 @@ llvm::DIType *FortranLLVM::get_debug_info_type(TL::Type t)
                 t.get_size() * 8,
                 llvm::dwarf::DW_ATE_complex_float);
     }
-    else if (t.is_array()
+    else if ((t.is_fortran_array() || t.is_fortran_character())
             && !t.array_requires_descriptor())
     {
         // Statically sized arrays or VLAs
@@ -2451,7 +2544,7 @@ llvm::DIType *FortranLLVM::get_debug_info_type(TL::Type t)
 
         std::vector<llvm::Metadata*> subscripts;
         TL::Type current_type = t;
-        while (current_type.is_array())
+        while (current_type.is_fortran_array())
         {
             Nodecl::NodeclBase lower, upper;
             current_type.array_get_bounds(lower, upper);
@@ -2479,7 +2572,7 @@ llvm::DIType *FortranLLVM::get_debug_info_type(TL::Type t)
 
 llvm::Value* FortranLLVM::evaluate_size_of_dimension(TL::Type t)
 {
-    ERROR_CONDITION(!t.is_array(), "Invalid type", 0);
+    ERROR_CONDITION(!t.is_fortran_array(), "Invalid type", 0);
 
     llvm::Value *current_size = nullptr;
     if (t.array_requires_descriptor())
@@ -2496,7 +2589,7 @@ llvm::Value* FortranLLVM::evaluate_size_of_dimension(TL::Type t)
 
 llvm::Value* FortranLLVM::evaluate_size_of_array(TL::Type t)
 {
-    ERROR_CONDITION(!t.is_array(), "Invalid type", 0);
+    ERROR_CONDITION(!t.is_fortran_array(), "Invalid type", 0);
     if (t.array_requires_descriptor())
     {
         internal_error("Not yet implemented", 0);
@@ -2504,7 +2597,7 @@ llvm::Value* FortranLLVM::evaluate_size_of_array(TL::Type t)
     else 
     {
         llvm::Value *val_size = nullptr;
-        while (t.is_array())
+        while (t.is_fortran_array())
         {
             llvm::Value *current_size = evaluate_size_of_dimension(t);
 
@@ -2520,9 +2613,18 @@ llvm::Value* FortranLLVM::evaluate_size_of_array(TL::Type t)
     }
 }
 
+llvm::Value *FortranLLVM::evaluate_length_of_character(TL::Type t)
+{
+    // FIXME - CHARACTER(LEN=*)
+    ERROR_CONDITION(!t.is_fortran_character(), "Invalid type", 0);
+    llvm::Value *val_size = eval_expression(t.array_get_size());
+
+    return val_size;
+}
+
 llvm::Value* FortranLLVM::evaluate_elements_of_dimension(TL::Type t)
 {
-    ERROR_CONDITION(!t.is_array(), "Invalid type", 0);
+    ERROR_CONDITION(!t.is_fortran_array(), "Invalid type", 0);
 
     llvm::Value *current_size = nullptr;
     if (t.array_requires_descriptor())
@@ -2553,6 +2655,7 @@ llvm::Value* FortranLLVM::evaluate_elements_of_dimension(TL::Type t)
         }
         else
         {
+            // FIXME - CHARACTER(LEN=*) will fail here
             current_size = eval_expression(t.array_get_size());
         }
     }
@@ -2562,7 +2665,7 @@ llvm::Value* FortranLLVM::evaluate_elements_of_dimension(TL::Type t)
 
 llvm::Value* FortranLLVM::evaluate_elements_of_array(TL::Type t)
 {
-    ERROR_CONDITION(!t.is_array(), "Invalid type", 0);
+    ERROR_CONDITION(!t.is_fortran_array(), "Invalid type", 0);
     if (t.array_requires_descriptor())
     {
         internal_error("Not yet implemented", 0);
@@ -2570,7 +2673,7 @@ llvm::Value* FortranLLVM::evaluate_elements_of_array(TL::Type t)
     else 
     {
         llvm::Value *val_size = nullptr;
-        while (t.is_array())
+        while (t.is_fortran_array())
         {
             llvm::Value *current_size = evaluate_elements_of_dimension(t);
 
@@ -2595,7 +2698,7 @@ void FortranLLVM::emit_variable(TL::Symbol sym)
         return;
 
     llvm::Value *array_size = nullptr;
-    if (sym.get_type().is_array() && sym.get_type().array_is_vla())
+    if (sym.get_type().is_fortran_array() && sym.get_type().array_is_vla())
     {
         // Emit size
         TrackLocation loc(this, sym.get_locus());
@@ -2688,6 +2791,15 @@ void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
             expr = ir_builder->CreatePointerCast(expr, llvm_types.ptr_i8);
 
             ir_builder->CreateCall(gfortran_rt.transfer_integer_write.get(),
+                                   { dt_parm, expr, eval_sizeof(n) });
+        }
+        else if (t.no_ref().is_bool())
+        {
+            llvm::Value *expr = eval_expression_to_memory(n);
+
+            expr = ir_builder->CreatePointerCast(expr, llvm_types.ptr_i8);
+
+            ir_builder->CreateCall(gfortran_rt.transfer_logical_write.get(),
                                    { dt_parm, expr, eval_sizeof(n) });
         }
         else if (t.no_ref().is_float()
@@ -2895,6 +3007,18 @@ void FortranLLVM::initialize_gfortran_runtime()
                     /* isVarArg */ false),
                 llvm::GlobalValue::ExternalLinkage,
                 "_gfortran_transfer_complex_write",
+                current_module.get()); 
+    };
+
+    this->gfortran_rt.transfer_logical_write = [&, this]() { 
+        return llvm::Function::Create(
+                llvm::FunctionType::get(llvm_types.void_,
+                    { gfortran_rt.st_parameter_dt.get()->getPointerTo(),
+                    llvm_types.ptr_i8,
+                    llvm_types.i32 },
+                    /* isVarArg */ false),
+                llvm::GlobalValue::ExternalLinkage,
+                "_gfortran_transfer_logical_write",
                 current_module.get()); 
     };
 

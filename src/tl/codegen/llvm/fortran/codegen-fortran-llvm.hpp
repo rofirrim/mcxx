@@ -87,6 +87,7 @@ namespace Codegen
         void visit(const Nodecl::IfElseStatement& node);
         void visit(const Nodecl::ForStatement& node);
         void visit(const Nodecl::FortranPrintStatement& node);
+        void visit(const Nodecl::WhileStatement& node);
 
       private:
         Codegen::FortranBase base;
@@ -135,6 +136,7 @@ namespace Codegen
             LazyObjectPtr<llvm::Function> transfer_integer_write;
             LazyObjectPtr<llvm::Function> transfer_real_write;
             LazyObjectPtr<llvm::Function> transfer_complex_write;
+            LazyObjectPtr<llvm::Function> transfer_logical_write;
             LazyObjectPtr<llvm::Function> st_write_done;
 
             LazyObjectPtr<llvm::Function> set_args;
@@ -303,6 +305,7 @@ namespace Codegen
         // Only considers array types
         llvm::Value* evaluate_size_of_dimension(TL::Type t);
         llvm::Value* evaluate_size_of_array(TL::Type sym);
+        llvm::Value* evaluate_length_of_character(TL::Type sym);
 
         llvm::Value *gep_for_field(
             llvm::Type *struct_type,

@@ -534,6 +534,12 @@ namespace TL
             // In particular CHARACTER(LEN=x) are arrays but not Fortran array
             bool is_fortran_array() const;
 
+            //! States whether curent type is a CHARACTER(LEN=x).
+            // These types are represented using arrays (so is_array returns
+            // true for them) but in Fortran they are handled as scalars (so
+            // is_fortran_array returns false for them)
+            bool is_fortran_character() const;
+
             //! Returns the rank of a fortran array type
             int fortran_rank() const;
 

@@ -437,6 +437,11 @@ namespace TL
         return (fortran_is_array_type(_type_info));
     }
 
+    bool Type::is_fortran_character() const
+    {
+        return (fortran_is_character_type(_type_info));
+    }
+
     int Type::fortran_rank() const
     {
         if (!is_fortran_array())
