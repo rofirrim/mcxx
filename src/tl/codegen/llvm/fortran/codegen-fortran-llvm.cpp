@@ -1799,14 +1799,20 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 create_pow_complex);
     }
 
-    template <typename Node, typename CreateSInt, typename CreateFloat, typename CreateComplex>
+    template <typename Node, typename CreateSInt, typename CreateFloat, typename CreateComplex, typename CreateCharacter>
     void arithmetic_binary_comparison(const Node node,
                                       CreateSInt create_sint,
                                       CreateFloat create_float,
-                                      CreateComplex create_complex)
+                                      CreateComplex create_complex,
+                                      CreateCharacter create_character)
     {
         TL::Type lhs_type = node.get_lhs().get_type().no_ref();
+        if (lhs_type.is_fortran_array())
+            lhs_type = lhs_type.array_base_element();
+
         TL::Type rhs_type = node.get_rhs().get_type().no_ref();
+        if (rhs_type.is_fortran_array())
+            rhs_type = rhs_type.array_base_element();
 
         BinaryOpCreator create;
         if (lhs_type.is_signed_integral() && rhs_type.is_signed_integral())
@@ -1815,6 +1821,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             create = create_float;
         else if (lhs_type.is_complex() && rhs_type.is_complex())
             create = create_complex;
+        else if (lhs_type.is_fortran_character() && rhs_type.is_fortran_character())
+            create = create_character;
         else
             internal_error("Unexpected type '%s' and '%s' for arithmetic binary relational operator\n",
                     print_declarator(lhs_type.get_internal_type()),
@@ -1830,37 +1838,480 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             value, llvm_visitor->get_llvm_type(node.get_type()));
     }
 
+    struct CharacterCompareLT
+    {
+        private:
+            FortranLLVM* llvm_visitor;
+
+        public:
+            CharacterCompareLT(FortranLLVM* llvm_visitor) : llvm_visitor(llvm_visitor) { }
+
+            llvm::Value* operator()(
+                    Nodecl::NodeclBase lhs, Nodecl::NodeclBase rhs,
+                    llvm::Value *vlhs, llvm::Value *vrhs)
+            {
+                llvm::Value *len_lhs = llvm_visitor->evaluate_length_of_character(lhs.get_type());
+                llvm::Value *len_rhs = llvm_visitor->evaluate_length_of_character(rhs.get_type());
+
+                llvm::Value *len_min = llvm_visitor->ir_builder->CreateSelect(
+                        llvm_visitor->ir_builder->CreateICmpSLT(len_lhs, len_rhs),
+                        len_lhs, len_rhs);
+
+                llvm::BasicBlock *loop_check = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.loop.check", llvm_visitor->get_current_function());
+                llvm::BasicBlock *loop_body = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.loop.body", llvm_visitor->get_current_function());
+                llvm::BasicBlock *loop_body_check = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.loop.body.check", llvm_visitor->get_current_function());
+                llvm::BasicBlock *loop_body_next = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.loop.body.next", llvm_visitor->get_current_function());
+                llvm::BasicBlock *loop_end = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.loop.end", llvm_visitor->get_current_function());
+
+                llvm::BasicBlock *tail_check = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.tail.loop.check", llvm_visitor->get_current_function());
+                llvm::BasicBlock *tail_body = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.tail.loop.body", llvm_visitor->get_current_function());
+                llvm::BasicBlock *tail_body_next = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.tail.loop.body.next", llvm_visitor->get_current_function());
+                llvm::BasicBlock *tail_nonempty = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.tail.nonempty", llvm_visitor->get_current_function());
+
+                llvm::BasicBlock *cmp_true = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.true", llvm_visitor->get_current_function());
+                llvm::BasicBlock *cmp_false = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.false", llvm_visitor->get_current_function());
+                llvm::BasicBlock *cmp_end = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.end", llvm_visitor->get_current_function());
+
+                // A first loop does the comparison between the prefix
+                llvm::Value *idx_var = llvm_visitor->ir_builder->CreateAlloca(llvm_visitor->llvm_types.i64);
+                llvm_visitor->ir_builder->CreateStore(llvm_visitor->get_integer_value_64(0), idx_var);
+                llvm_visitor->ir_builder->CreateBr(loop_check);
+
+                llvm_visitor->set_current_block(loop_check);
+                llvm_visitor->ir_builder->CreateCondBr(
+                        llvm_visitor->ir_builder->CreateICmpSLT(
+                            llvm_visitor->ir_builder->CreateLoad(idx_var),
+                            len_min),
+                        loop_body,
+                        loop_end);
+
+                llvm_visitor->set_current_block(loop_body);
+
+                llvm::Value *lhs_offset = llvm_visitor->ir_builder->CreateGEP(
+                        llvm_visitor->ir_builder->CreatePointerCast(vlhs, llvm_visitor->llvm_types.ptr_i8),
+                        { llvm_visitor->ir_builder->CreateLoad(idx_var) });
+                llvm::Value *lhs_char = llvm_visitor->ir_builder->CreateLoad(lhs_offset);
+
+                llvm::Value *rhs_offset = llvm_visitor->ir_builder->CreateGEP(
+                        llvm_visitor->ir_builder->CreatePointerCast(vrhs, llvm_visitor->llvm_types.ptr_i8),
+                        { llvm_visitor->ir_builder->CreateLoad(idx_var) });
+                llvm::Value *rhs_char = llvm_visitor->ir_builder->CreateLoad(rhs_offset);
+
+                llvm_visitor->ir_builder->CreateCondBr(
+                        llvm_visitor->ir_builder->CreateICmpEQ(
+                            lhs_char,
+                            rhs_char),
+                        loop_body_next,
+                        loop_body_check);
+
+                llvm_visitor->set_current_block(loop_body_check);
+                llvm_visitor->ir_builder->CreateCondBr(
+                        llvm_visitor->ir_builder->CreateICmpSLT(
+                            lhs_char,
+                            rhs_char),
+                        cmp_true,
+                        cmp_false);
+
+                llvm_visitor->set_current_block(loop_body_next);
+                llvm_visitor->ir_builder->CreateStore(
+                        llvm_visitor->ir_builder->CreateAdd(
+                            llvm_visitor->ir_builder->CreateLoad(idx_var),
+                            llvm_visitor->get_integer_value_64(1)),
+                        idx_var);
+                llvm_visitor->ir_builder->CreateBr(loop_check);
+
+                llvm_visitor->set_current_block(loop_end);
+
+                // A second loop makes sure that the remainder of the longest string is all blanks
+                llvm::Value *checked_character = llvm_visitor->ir_builder->CreateSelect(
+                        llvm_visitor->ir_builder->CreateICmpSLT(
+                            llvm_visitor->ir_builder->CreateLoad(idx_var),
+                            len_lhs),
+                        vlhs,
+                        vrhs);
+                llvm::Value *len_max = llvm_visitor->ir_builder->CreateSelect(
+                        llvm_visitor->ir_builder->CreateICmpSGT(len_lhs, len_rhs),
+                        len_lhs, len_rhs);
+                llvm_visitor->ir_builder->CreateBr(tail_check);
+
+                llvm_visitor->set_current_block(tail_check);
+                llvm_visitor->ir_builder->CreateCondBr(
+                        llvm_visitor->ir_builder->CreateICmpSLT(
+                            llvm_visitor->ir_builder->CreateLoad(idx_var),
+                            len_max),
+                        tail_body,
+                        cmp_false);
+
+                llvm_visitor->set_current_block(tail_body);
+                llvm_visitor->ir_builder->CreateCondBr(
+                        llvm_visitor->ir_builder->CreateICmpEQ(
+                            llvm_visitor->ir_builder->CreateLoad(
+                                llvm_visitor->ir_builder->CreateGEP(
+                                    llvm_visitor->ir_builder->CreatePointerCast(checked_character, llvm_visitor->llvm_types.ptr_i8),
+                                    { llvm_visitor->ir_builder->CreateLoad(idx_var) })),
+                            llvm_visitor->get_integer_value_N(' ', llvm_visitor->llvm_types.i8, 8)),
+                        tail_body_next,
+                        tail_nonempty);
+
+                llvm_visitor->set_current_block(tail_body_next);
+                llvm_visitor->ir_builder->CreateStore(
+                        llvm_visitor->ir_builder->CreateAdd(
+                            llvm_visitor->ir_builder->CreateLoad(idx_var),
+                            llvm_visitor->get_integer_value_64(1)),
+                        idx_var);
+                llvm_visitor->ir_builder->CreateBr(tail_check);
+
+                llvm_visitor->set_current_block(tail_nonempty);
+                llvm_visitor->ir_builder->CreateCondBr(
+                        llvm_visitor->ir_builder->CreateICmpSLT(len_lhs, len_rhs),
+                        cmp_true, cmp_false);
+
+                llvm_visitor->set_current_block(cmp_true);
+                llvm::Value *result_true = llvm_visitor->get_integer_value_N(1, llvm_visitor->llvm_types.i1, 1);
+                llvm_visitor->ir_builder->CreateBr(cmp_end);
+
+                llvm_visitor->set_current_block(cmp_false);
+                llvm::Value *result_false = llvm_visitor->get_integer_value_N(0, llvm_visitor->llvm_types.i1, 1);
+                llvm_visitor->ir_builder->CreateBr(cmp_end);
+
+                llvm_visitor->set_current_block(cmp_end);
+                llvm::Value *value = llvm_visitor->ir_builder->CreatePHI(
+                        llvm_visitor->llvm_types.i1, 2);
+                llvm::cast<llvm::PHINode>(value)->addIncoming(result_true, cmp_true);
+                llvm::cast<llvm::PHINode>(value)->addIncoming(result_false, cmp_false);
+
+                return value;
+            }
+    };
+
     void visit(const Nodecl::LowerThan &node)
     {
+        CharacterCompareLT character_compare_lt(llvm_visitor);
         arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpSLT),
                               CREATOR(CreateFCmpOLT),
-                              UNIMPLEMENTED_OP);
+                              INVALID_OP,
+                              character_compare_lt);
     }
+
+    struct CharacterCompareLE
+    {
+        private:
+            FortranLLVM* llvm_visitor;
+
+        public:
+            CharacterCompareLE(FortranLLVM* llvm_visitor) : llvm_visitor(llvm_visitor) { }
+
+            llvm::Value* operator()(
+                    Nodecl::NodeclBase lhs, Nodecl::NodeclBase rhs,
+                    llvm::Value *vlhs, llvm::Value *vrhs)
+            {
+                llvm::Value *len_lhs = llvm_visitor->evaluate_length_of_character(lhs.get_type());
+                llvm::Value *len_rhs = llvm_visitor->evaluate_length_of_character(rhs.get_type());
+
+                llvm::Value *len_min = llvm_visitor->ir_builder->CreateSelect(
+                        llvm_visitor->ir_builder->CreateICmpSLT(len_lhs, len_rhs),
+                        len_lhs, len_rhs);
+
+                llvm::BasicBlock *loop_check = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.loop.check", llvm_visitor->get_current_function());
+                llvm::BasicBlock *loop_body = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.loop.body", llvm_visitor->get_current_function());
+                llvm::BasicBlock *loop_body_check = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.loop.body.check", llvm_visitor->get_current_function());
+                llvm::BasicBlock *loop_body_next = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.loop.body.next", llvm_visitor->get_current_function());
+                llvm::BasicBlock *loop_end = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.loop.end", llvm_visitor->get_current_function());
+
+                llvm::BasicBlock *tail_check = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.tail.loop.check", llvm_visitor->get_current_function());
+                llvm::BasicBlock *tail_body = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.tail.loop.body", llvm_visitor->get_current_function());
+                llvm::BasicBlock *tail_body_next = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.tail.loop.body.next", llvm_visitor->get_current_function());
+                llvm::BasicBlock *tail_nonempty = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.tail.nonempty", llvm_visitor->get_current_function());
+
+                llvm::BasicBlock *cmp_true = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.true", llvm_visitor->get_current_function());
+                llvm::BasicBlock *cmp_false = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.false", llvm_visitor->get_current_function());
+                llvm::BasicBlock *cmp_end = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.end", llvm_visitor->get_current_function());
+
+                // A first loop does the comparison between the prefix
+                llvm::Value *idx_var = llvm_visitor->ir_builder->CreateAlloca(llvm_visitor->llvm_types.i64);
+                llvm_visitor->ir_builder->CreateStore(llvm_visitor->get_integer_value_64(0), idx_var);
+                llvm_visitor->ir_builder->CreateBr(loop_check);
+
+                llvm_visitor->set_current_block(loop_check);
+                llvm_visitor->ir_builder->CreateCondBr(
+                        llvm_visitor->ir_builder->CreateICmpSLT(
+                            llvm_visitor->ir_builder->CreateLoad(idx_var),
+                            len_min),
+                        loop_body,
+                        loop_end);
+
+                llvm_visitor->set_current_block(loop_body);
+
+                llvm::Value *lhs_offset = llvm_visitor->ir_builder->CreateGEP(
+                        llvm_visitor->ir_builder->CreatePointerCast(vlhs, llvm_visitor->llvm_types.ptr_i8),
+                        { llvm_visitor->ir_builder->CreateLoad(idx_var) });
+                llvm::Value *lhs_char = llvm_visitor->ir_builder->CreateLoad(lhs_offset);
+
+                llvm::Value *rhs_offset = llvm_visitor->ir_builder->CreateGEP(
+                        llvm_visitor->ir_builder->CreatePointerCast(vrhs, llvm_visitor->llvm_types.ptr_i8),
+                        { llvm_visitor->ir_builder->CreateLoad(idx_var) });
+                llvm::Value *rhs_char = llvm_visitor->ir_builder->CreateLoad(rhs_offset);
+
+                llvm_visitor->ir_builder->CreateCondBr(
+                        llvm_visitor->ir_builder->CreateICmpEQ(
+                            lhs_char,
+                            rhs_char),
+                        loop_body_next,
+                        loop_body_check);
+
+                llvm_visitor->set_current_block(loop_body_check);
+                llvm_visitor->ir_builder->CreateCondBr(
+                        llvm_visitor->ir_builder->CreateICmpSLE(
+                            lhs_char,
+                            rhs_char),
+                        cmp_true,
+                        cmp_false);
+
+                llvm_visitor->set_current_block(loop_body_next);
+                llvm_visitor->ir_builder->CreateStore(
+                        llvm_visitor->ir_builder->CreateAdd(
+                            llvm_visitor->ir_builder->CreateLoad(idx_var),
+                            llvm_visitor->get_integer_value_64(1)),
+                        idx_var);
+                llvm_visitor->ir_builder->CreateBr(loop_check);
+
+                llvm_visitor->set_current_block(loop_end);
+
+                // A second loop makes sure that the remainder of the longest string is all blanks
+                llvm::Value *checked_character = llvm_visitor->ir_builder->CreateSelect(
+                        llvm_visitor->ir_builder->CreateICmpSLT(
+                            llvm_visitor->ir_builder->CreateLoad(idx_var),
+                            len_lhs),
+                        vlhs,
+                        vrhs);
+                llvm::Value *len_max = llvm_visitor->ir_builder->CreateSelect(
+                        llvm_visitor->ir_builder->CreateICmpSGT(len_lhs, len_rhs),
+                        len_lhs, len_rhs);
+                llvm_visitor->ir_builder->CreateBr(tail_check);
+
+                llvm_visitor->set_current_block(tail_check);
+                llvm_visitor->ir_builder->CreateCondBr(
+                        llvm_visitor->ir_builder->CreateICmpSLT(
+                            llvm_visitor->ir_builder->CreateLoad(idx_var),
+                            len_max),
+                        tail_body,
+                        cmp_true);
+
+                llvm_visitor->set_current_block(tail_body);
+                llvm_visitor->ir_builder->CreateCondBr(
+                        llvm_visitor->ir_builder->CreateICmpEQ(
+                            llvm_visitor->ir_builder->CreateLoad(
+                                llvm_visitor->ir_builder->CreateGEP(
+                                    llvm_visitor->ir_builder->CreatePointerCast(checked_character, llvm_visitor->llvm_types.ptr_i8),
+                                    { llvm_visitor->ir_builder->CreateLoad(idx_var) })),
+                            llvm_visitor->get_integer_value_N(' ', llvm_visitor->llvm_types.i8, 8)),
+                        tail_body_next,
+                        tail_nonempty);
+
+                llvm_visitor->set_current_block(tail_body_next);
+                llvm_visitor->ir_builder->CreateStore(
+                        llvm_visitor->ir_builder->CreateAdd(
+                            llvm_visitor->ir_builder->CreateLoad(idx_var),
+                            llvm_visitor->get_integer_value_64(1)),
+                        idx_var);
+                llvm_visitor->ir_builder->CreateBr(tail_check);
+
+                llvm_visitor->set_current_block(tail_nonempty);
+                llvm_visitor->ir_builder->CreateCondBr(
+                        llvm_visitor->ir_builder->CreateICmpSLT(len_lhs, len_rhs),
+                        cmp_true, cmp_false);
+
+                llvm_visitor->set_current_block(cmp_true);
+                llvm::Value *result_true = llvm_visitor->get_integer_value_N(1, llvm_visitor->llvm_types.i1, 1);
+                llvm_visitor->ir_builder->CreateBr(cmp_end);
+
+                llvm_visitor->set_current_block(cmp_false);
+                llvm::Value *result_false = llvm_visitor->get_integer_value_N(0, llvm_visitor->llvm_types.i1, 1);
+                llvm_visitor->ir_builder->CreateBr(cmp_end);
+
+                llvm_visitor->set_current_block(cmp_end);
+                llvm::Value *value = llvm_visitor->ir_builder->CreatePHI(
+                        llvm_visitor->llvm_types.i1, 2);
+                llvm::cast<llvm::PHINode>(value)->addIncoming(result_true, cmp_true);
+                llvm::cast<llvm::PHINode>(value)->addIncoming(result_false, cmp_false);
+
+                return value;
+            }
+    };
 
     void visit(const Nodecl::LowerOrEqualThan &node)
     {
+        CharacterCompareLE character_compare_le(llvm_visitor);
         arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpSLE),
                               CREATOR(CreateFCmpOLE),
-                              UNIMPLEMENTED_OP);
+                              INVALID_OP,
+                              character_compare_le);
     }
 
     void visit(const Nodecl::GreaterThan &node)
     {
+        auto character_compare_gt = [&, this](Nodecl::NodeclBase lhs, Nodecl::NodeclBase rhs,
+                llvm::Value* vlhs, llvm::Value *vrhs)
+        {
+            CharacterCompareLT character_compare_lt(llvm_visitor);
+            // a > b computed as b < a
+            return character_compare_lt(rhs, lhs, vrhs, vlhs);
+        };
         arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpSGT),
                               CREATOR(CreateFCmpOGT),
-                              UNIMPLEMENTED_OP);
+                              INVALID_OP,
+                              character_compare_gt);
     }
 
     void visit(const Nodecl::GreaterOrEqualThan &node)
     {
+        auto character_compare_ge = [&, this](Nodecl::NodeclBase lhs, Nodecl::NodeclBase rhs,
+                llvm::Value* vlhs, llvm::Value *vrhs) -> llvm::Value*
+        {
+            CharacterCompareLE character_compare_le(llvm_visitor);
+            // a >= b computed as b <= a
+            return character_compare_le(rhs, lhs, vrhs, vlhs);
+        };
         arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpSGE),
                               CREATOR(CreateFCmpOGE),
-                              UNIMPLEMENTED_OP);
+                              INVALID_OP,
+                              character_compare_ge);
     }
+
+    struct CharacterCompareEQ
+    {
+        private:
+            FortranLLVM* llvm_visitor;
+
+        public:
+            CharacterCompareEQ(FortranLLVM* llvm_visitor) : llvm_visitor(llvm_visitor) { }
+
+            llvm::Value* operator()(
+                    Nodecl::NodeclBase lhs, Nodecl::NodeclBase rhs,
+                    llvm::Value *vlhs, llvm::Value *vrhs)
+            {
+                llvm::Value *len_lhs = llvm_visitor->evaluate_length_of_character(lhs.get_type());
+                llvm::Value *len_rhs = llvm_visitor->evaluate_length_of_character(rhs.get_type());
+
+                llvm::Value *len_min = llvm_visitor->ir_builder->CreateSelect(
+                        llvm_visitor->ir_builder->CreateICmpSLT(len_lhs, len_rhs),
+                        len_lhs, len_rhs);
+
+                llvm::BasicBlock *loop_check = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.loop.check", llvm_visitor->get_current_function());
+                llvm::BasicBlock *loop_body = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.loop.body", llvm_visitor->get_current_function());
+                llvm::BasicBlock *loop_body_next = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.loop.body.next", llvm_visitor->get_current_function());
+                llvm::BasicBlock *loop_end = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.loop.end", llvm_visitor->get_current_function());
+
+                llvm::BasicBlock *tail_check = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.tail.loop.check", llvm_visitor->get_current_function());
+                llvm::BasicBlock *tail_body = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.tail.loop.body", llvm_visitor->get_current_function());
+                llvm::BasicBlock *tail_body_next = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.tail.loop.body.next", llvm_visitor->get_current_function());
+
+                llvm::BasicBlock *cmp_true = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.true", llvm_visitor->get_current_function());
+                llvm::BasicBlock *cmp_false = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.false", llvm_visitor->get_current_function());
+                llvm::BasicBlock *cmp_end = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.end", llvm_visitor->get_current_function());
+
+                // A first loop does the comparison between the prefix
+                llvm::Value *idx_var = llvm_visitor->ir_builder->CreateAlloca(llvm_visitor->llvm_types.i64);
+                llvm_visitor->ir_builder->CreateStore(llvm_visitor->get_integer_value_64(0), idx_var);
+                llvm_visitor->ir_builder->CreateBr(loop_check);
+
+                llvm_visitor->set_current_block(loop_check);
+                llvm_visitor->ir_builder->CreateCondBr(
+                        llvm_visitor->ir_builder->CreateICmpSLT(
+                            llvm_visitor->ir_builder->CreateLoad(idx_var),
+                            len_min),
+                        loop_body,
+                        loop_end);
+
+                llvm_visitor->set_current_block(loop_body);
+
+                llvm::Value *lhs_offset = llvm_visitor->ir_builder->CreateGEP(
+                        llvm_visitor->ir_builder->CreatePointerCast(vlhs, llvm_visitor->llvm_types.ptr_i8),
+                        { llvm_visitor->ir_builder->CreateLoad(idx_var) });
+                llvm::Value *lhs_char = llvm_visitor->ir_builder->CreateLoad(lhs_offset);
+
+                llvm::Value *rhs_offset = llvm_visitor->ir_builder->CreateGEP(
+                        llvm_visitor->ir_builder->CreatePointerCast(vrhs, llvm_visitor->llvm_types.ptr_i8),
+                        { llvm_visitor->ir_builder->CreateLoad(idx_var) });
+                llvm::Value *rhs_char = llvm_visitor->ir_builder->CreateLoad(rhs_offset);
+
+                llvm_visitor->ir_builder->CreateCondBr(
+                        llvm_visitor->ir_builder->CreateICmpEQ(
+                            lhs_char,
+                            rhs_char),
+                        loop_body_next,
+                        cmp_false);
+
+                llvm_visitor->set_current_block(loop_body_next);
+                llvm_visitor->ir_builder->CreateStore(
+                        llvm_visitor->ir_builder->CreateAdd(
+                            llvm_visitor->ir_builder->CreateLoad(idx_var),
+                            llvm_visitor->get_integer_value_64(1)),
+                        idx_var);
+                llvm_visitor->ir_builder->CreateBr(loop_check);
+
+                llvm_visitor->set_current_block(loop_end);
+
+                // A second loop makes sure that the remainder of the longest string is all blanks
+                llvm::Value *checked_character = llvm_visitor->ir_builder->CreateSelect(
+                        llvm_visitor->ir_builder->CreateICmpSLT(
+                            llvm_visitor->ir_builder->CreateLoad(idx_var),
+                            len_lhs),
+                        vlhs,
+                        vrhs);
+                llvm::Value *len_max = llvm_visitor->ir_builder->CreateSelect(
+                        llvm_visitor->ir_builder->CreateICmpSGT(len_lhs, len_rhs),
+                        len_lhs, len_rhs);
+                llvm_visitor->ir_builder->CreateBr(tail_check);
+
+                llvm_visitor->set_current_block(tail_check);
+                llvm_visitor->ir_builder->CreateCondBr(
+                        llvm_visitor->ir_builder->CreateICmpSLT(
+                            llvm_visitor->ir_builder->CreateLoad(idx_var),
+                            len_max),
+                        tail_body,
+                        cmp_true);
+
+                llvm_visitor->set_current_block(tail_body);
+                llvm_visitor->ir_builder->CreateCondBr(
+                        llvm_visitor->ir_builder->CreateICmpEQ(
+                            llvm_visitor->ir_builder->CreateLoad(
+                                llvm_visitor->ir_builder->CreateGEP(
+                                    llvm_visitor->ir_builder->CreatePointerCast(checked_character, llvm_visitor->llvm_types.ptr_i8),
+                                    { llvm_visitor->ir_builder->CreateLoad(idx_var) })),
+                            llvm_visitor->get_integer_value_N(' ', llvm_visitor->llvm_types.i8, 8)),
+                        tail_body_next,
+                        cmp_false);
+
+                llvm_visitor->set_current_block(tail_body_next);
+                llvm_visitor->ir_builder->CreateStore(
+                        llvm_visitor->ir_builder->CreateAdd(
+                            llvm_visitor->ir_builder->CreateLoad(idx_var),
+                            llvm_visitor->get_integer_value_64(1)),
+                        idx_var);
+                llvm_visitor->ir_builder->CreateBr(tail_check);
+
+                llvm_visitor->set_current_block(cmp_true);
+                llvm::Value *result_true = llvm_visitor->get_integer_value_N(1, llvm_visitor->llvm_types.i1, 1);
+                llvm_visitor->ir_builder->CreateBr(cmp_end);
+
+                llvm_visitor->set_current_block(cmp_false);
+                llvm::Value *result_false = llvm_visitor->get_integer_value_N(0, llvm_visitor->llvm_types.i1, 1);
+                llvm_visitor->ir_builder->CreateBr(cmp_end);
+
+                llvm_visitor->set_current_block(cmp_end);
+                llvm::Value *value = llvm_visitor->ir_builder->CreatePHI(
+                        llvm_visitor->llvm_types.i1, 2);
+                llvm::cast<llvm::PHINode>(value)->addIncoming(result_true, cmp_true);
+                llvm::cast<llvm::PHINode>(value)->addIncoming(result_false, cmp_false);
+
+                return value;
+            }
+    };
 
     void visit(const Nodecl::Equal &node)
     {
@@ -1880,10 +2331,13 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                     llvm_visitor->get_integer_value_N(0, llvm_visitor->llvm_types.i1, 1));
         };
 
+        CharacterCompareEQ character_compare_eq(llvm_visitor);
+
         arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpEQ),
                               CREATOR(CreateFCmpOEQ),
-                              creator_complex);
+                              creator_complex,
+                              character_compare_eq);
     }
 
     void visit(const Nodecl::Different &node)
@@ -1904,10 +2358,22 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                     llvm_visitor->get_integer_value_N(0, llvm_visitor->llvm_types.i1, 1));
         };
 
+        auto character_compare_ne = [&, this](Nodecl::NodeclBase lhs, Nodecl::NodeclBase rhs,
+            llvm::Value *vlhs, llvm::Value *vrhs) -> llvm::Value*
+        {
+            CharacterCompareEQ compare_eq(llvm_visitor);
+            llvm::Value *v = llvm_visitor->ir_builder->CreateSelect(
+                compare_eq(lhs, rhs, vlhs, vrhs),
+                llvm_visitor->get_integer_value_N(0, llvm_visitor->llvm_types.i1, 1),
+                llvm_visitor->get_integer_value_N(1, llvm_visitor->llvm_types.i1, 1));
+            return v;
+        };
+
         arithmetic_binary_comparison(node,
                               CREATOR(CreateICmpNE),
                               CREATOR(CreateFCmpONE),
-                              creator_complex);
+                              creator_complex,
+                              character_compare_ne);
     }
 #undef CREATOR
 #undef UNIMPLEMENTED_OP
