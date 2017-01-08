@@ -1823,6 +1823,9 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             create = create_complex;
         else if (lhs_type.is_fortran_character() && rhs_type.is_fortran_character())
             create = create_character;
+        // This happens only for .EQV. and .NEQV.
+        else if (lhs_type.is_bool() && rhs_type.is_bool())
+            create = create_sint;
         else
             internal_error("Unexpected type '%s' and '%s' for arithmetic binary relational operator\n",
                     print_declarator(lhs_type.get_internal_type()),
