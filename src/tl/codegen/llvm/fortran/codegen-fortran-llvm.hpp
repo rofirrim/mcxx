@@ -88,6 +88,9 @@ namespace Codegen
         void visit(const Nodecl::ForStatement& node);
         void visit(const Nodecl::FortranPrintStatement& node);
         void visit(const Nodecl::WhileStatement& node);
+        void visit(const Nodecl::SwitchStatement &node);
+        void visit(const Nodecl::CaseStatement &node);
+        void visit(const Nodecl::DefaultStatement &node);
 
       private:
         Codegen::FortranBase base;
@@ -179,6 +182,35 @@ namespace Codegen
                 *this = DebugInfo();
             }
         } dbg_info;
+
+        struct SwitchInfo
+        {
+            llvm::BasicBlock *end_block = nullptr;
+
+            llvm::Value *value = nullptr;
+            Nodecl::NodeclBase expr;
+
+            Nodecl::NodeclBase default_case;
+        };
+
+        std::vector<SwitchInfo> switch_info_stack;
+
+        void push_switch()
+        {
+            switch_info_stack.push_back(SwitchInfo());
+        }
+
+        SwitchInfo& current_switch()
+        {
+            ERROR_CONDITION(switch_info_stack.empty(), "Invalid empty switch stack", 0);
+            return switch_info_stack.back();
+        }
+
+        void pop_switch()
+        {
+            ERROR_CONDITION(switch_info_stack.empty(), "Invalid empty switch stack", 0);
+            switch_info_stack.pop_back();
+        }
 
       private:
         void initialize_llvm_context();

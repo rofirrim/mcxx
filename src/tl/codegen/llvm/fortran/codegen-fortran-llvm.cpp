@@ -2854,6 +2854,85 @@ llvm::Value *FortranLLVM::eval_sizeof_64(TL::Type t)
     }
 }
 
+void FortranLLVM::visit(const Nodecl::SwitchStatement &node)
+{
+    push_switch();
+
+    current_switch().end_block = llvm::BasicBlock::Create(llvm_context, "switch.end", get_current_function());
+
+    current_switch().expr = node.get_switch();
+    current_switch().value = eval_expression(node.get_switch());
+
+    walk(node.get_statement());
+
+    if (!current_switch().default_case.is_null())
+    {
+        walk(current_switch().default_case.as<Nodecl::DefaultStatement>().get_statement());
+    }
+
+    ir_builder->CreateBr(current_switch().end_block);
+
+    set_current_block(current_switch().end_block);
+
+    pop_switch();
+}
+
+void FortranLLVM::visit(const Nodecl::DefaultStatement &node)
+{
+    current_switch().default_case = node;
+}
+
+void FortranLLVM::visit(const Nodecl::CaseStatement &node)
+{
+    Nodecl::List cases = node.get_case().as<Nodecl::List>();
+    
+    TL::Type t = current_switch().expr.get_type().no_ref();
+
+    llvm::BasicBlock *switch_case = llvm::BasicBlock::Create(llvm_context, "switch.case", get_current_function());
+
+    for (Nodecl::NodeclBase current_case : cases)
+    {
+        if (current_case.is<Nodecl::Range>())
+        {
+            internal_error("Not yet implemented", 0);
+        }
+        else
+        {
+            llvm::Value *current_value = eval_expression(current_case);
+            llvm::Value *check = nullptr;
+            if (t.is_signed_integral() || t.is_bool())
+            {
+                check = ir_builder->CreateICmpEQ(current_switch().value, current_value);
+            }
+            else if (t.is_fortran_character())
+            {
+                FortranVisitorLLVMExpression::CharacterCompareEQ character_compare_eq(this);
+                check = character_compare_eq(
+                            current_switch().expr, current_case,
+                            current_switch().value, current_value);
+            }
+            else
+            {
+                internal_error("Unexpected type '%s'\n",
+                        print_declarator(t.get_internal_type()));
+            }
+
+            llvm::BasicBlock *next_check = llvm::BasicBlock::Create(llvm_context, "switch.case.next_check", get_current_function());
+            ir_builder->CreateCondBr(check, switch_case, next_check);
+            set_current_block(next_check);
+        }
+    }
+
+    llvm::BasicBlock *switch_case_end = llvm::BasicBlock::Create(llvm_context, "switch.case.end", get_current_function());
+    ir_builder->CreateBr(switch_case_end);
+
+    set_current_block(switch_case);
+    walk(node.get_statement());
+    ir_builder->CreateBr(current_switch().end_block);
+
+    set_current_block(switch_case_end);
+}
+
 llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
 {
     if (t.is_lvalue_reference())
