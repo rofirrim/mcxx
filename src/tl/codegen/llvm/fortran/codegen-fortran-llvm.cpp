@@ -2856,6 +2856,7 @@ llvm::Value *FortranLLVM::eval_sizeof_64(TL::Type t)
 
 void FortranLLVM::visit(const Nodecl::SwitchStatement &node)
 {
+    FortranLLVM::TrackLocation loc(this, node);
     push_switch();
 
     current_switch().end_block = llvm::BasicBlock::Create(llvm_context, "switch.end", get_current_function());
@@ -2867,6 +2868,7 @@ void FortranLLVM::visit(const Nodecl::SwitchStatement &node)
 
     if (!current_switch().default_case.is_null())
     {
+        FortranLLVM::TrackLocation loc(this, current_switch().default_case);
         walk(current_switch().default_case.as<Nodecl::DefaultStatement>().get_statement());
     }
 
@@ -2884,6 +2886,7 @@ void FortranLLVM::visit(const Nodecl::DefaultStatement &node)
 
 void FortranLLVM::visit(const Nodecl::CaseStatement &node)
 {
+    FortranLLVM::TrackLocation loc(this, node);
     Nodecl::List cases = node.get_case().as<Nodecl::List>();
     
     TL::Type t = current_switch().expr.get_type().no_ref();
