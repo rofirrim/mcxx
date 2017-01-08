@@ -651,6 +651,8 @@ void FortranLLVM::visit(const Nodecl::WhileStatement& node)
     set_current_block(while_end);
 }
 
+
+
 class FortranVisitorLLVMExpressionBase : public Nodecl::NodeclVisitor<void>
 {
   protected:
@@ -1875,6 +1877,10 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 llvm::BasicBlock *cmp_false = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.false", llvm_visitor->get_current_function());
                 llvm::BasicBlock *cmp_end = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.end", llvm_visitor->get_current_function());
 
+                // Normalize operands types
+                vlhs = llvm_visitor->ir_builder->CreatePointerCast(vlhs, llvm_visitor->llvm_types.ptr_i8);
+                vrhs = llvm_visitor->ir_builder->CreatePointerCast(vrhs, llvm_visitor->llvm_types.ptr_i8);
+
                 // A first loop does the comparison between the prefix
                 llvm::Value *idx_var = llvm_visitor->ir_builder->CreateAlloca(llvm_visitor->llvm_types.i64);
                 llvm_visitor->ir_builder->CreateStore(llvm_visitor->get_integer_value_64(0), idx_var);
@@ -1891,12 +1897,12 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 llvm_visitor->set_current_block(loop_body);
 
                 llvm::Value *lhs_offset = llvm_visitor->ir_builder->CreateGEP(
-                        llvm_visitor->ir_builder->CreatePointerCast(vlhs, llvm_visitor->llvm_types.ptr_i8),
+                        vlhs,
                         { llvm_visitor->ir_builder->CreateLoad(idx_var) });
                 llvm::Value *lhs_char = llvm_visitor->ir_builder->CreateLoad(lhs_offset);
 
                 llvm::Value *rhs_offset = llvm_visitor->ir_builder->CreateGEP(
-                        llvm_visitor->ir_builder->CreatePointerCast(vrhs, llvm_visitor->llvm_types.ptr_i8),
+                        vrhs,
                         { llvm_visitor->ir_builder->CreateLoad(idx_var) });
                 llvm::Value *rhs_char = llvm_visitor->ir_builder->CreateLoad(rhs_offset);
 
@@ -2031,6 +2037,10 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 llvm::BasicBlock *cmp_false = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.false", llvm_visitor->get_current_function());
                 llvm::BasicBlock *cmp_end = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.end", llvm_visitor->get_current_function());
 
+                // Normalize operands types
+                vlhs = llvm_visitor->ir_builder->CreatePointerCast(vlhs, llvm_visitor->llvm_types.ptr_i8);
+                vrhs = llvm_visitor->ir_builder->CreatePointerCast(vrhs, llvm_visitor->llvm_types.ptr_i8);
+
                 // A first loop does the comparison between the prefix
                 llvm::Value *idx_var = llvm_visitor->ir_builder->CreateAlloca(llvm_visitor->llvm_types.i64);
                 llvm_visitor->ir_builder->CreateStore(llvm_visitor->get_integer_value_64(0), idx_var);
@@ -2047,12 +2057,12 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 llvm_visitor->set_current_block(loop_body);
 
                 llvm::Value *lhs_offset = llvm_visitor->ir_builder->CreateGEP(
-                        llvm_visitor->ir_builder->CreatePointerCast(vlhs, llvm_visitor->llvm_types.ptr_i8),
+                        vlhs,
                         { llvm_visitor->ir_builder->CreateLoad(idx_var) });
                 llvm::Value *lhs_char = llvm_visitor->ir_builder->CreateLoad(lhs_offset);
 
                 llvm::Value *rhs_offset = llvm_visitor->ir_builder->CreateGEP(
-                        llvm_visitor->ir_builder->CreatePointerCast(vrhs, llvm_visitor->llvm_types.ptr_i8),
+                        vrhs,
                         { llvm_visitor->ir_builder->CreateLoad(idx_var) });
                 llvm::Value *rhs_char = llvm_visitor->ir_builder->CreateLoad(rhs_offset);
 
@@ -2217,6 +2227,10 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 llvm::BasicBlock *cmp_false = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.false", llvm_visitor->get_current_function());
                 llvm::BasicBlock *cmp_end = llvm::BasicBlock::Create(llvm_visitor->llvm_context, "character.cmp.end", llvm_visitor->get_current_function());
 
+                // Normalize operands types
+                vlhs = llvm_visitor->ir_builder->CreatePointerCast(vlhs, llvm_visitor->llvm_types.ptr_i8);
+                vrhs = llvm_visitor->ir_builder->CreatePointerCast(vrhs, llvm_visitor->llvm_types.ptr_i8);
+
                 // A first loop does the comparison between the prefix
                 llvm::Value *idx_var = llvm_visitor->ir_builder->CreateAlloca(llvm_visitor->llvm_types.i64);
                 llvm_visitor->ir_builder->CreateStore(llvm_visitor->get_integer_value_64(0), idx_var);
@@ -2233,12 +2247,12 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 llvm_visitor->set_current_block(loop_body);
 
                 llvm::Value *lhs_offset = llvm_visitor->ir_builder->CreateGEP(
-                        llvm_visitor->ir_builder->CreatePointerCast(vlhs, llvm_visitor->llvm_types.ptr_i8),
+                        vlhs,
                         { llvm_visitor->ir_builder->CreateLoad(idx_var) });
                 llvm::Value *lhs_char = llvm_visitor->ir_builder->CreateLoad(lhs_offset);
 
                 llvm::Value *rhs_offset = llvm_visitor->ir_builder->CreateGEP(
-                        llvm_visitor->ir_builder->CreatePointerCast(vrhs, llvm_visitor->llvm_types.ptr_i8),
+                        vrhs,
                         { llvm_visitor->ir_builder->CreateLoad(idx_var) });
                 llvm::Value *rhs_char = llvm_visitor->ir_builder->CreateLoad(rhs_offset);
 
