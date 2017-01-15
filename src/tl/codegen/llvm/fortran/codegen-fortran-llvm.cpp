@@ -3134,6 +3134,11 @@ llvm::DIType *FortranLLVM::get_debug_info_type(TL::Type t)
                 get_debug_info_type(current_type.array_base_element()),
                 array);
     }
+    else if (t.is_fortran_array() && t.array_requires_descriptor())
+    {
+        // FIXME - LLVM is lacking in this area
+        return dbg_builder->createUnspecifiedType("void");
+    }
     else
     {
         internal_error("Cannot synthesize Debug Info type for type '%s'",
