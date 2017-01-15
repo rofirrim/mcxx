@@ -87,6 +87,7 @@ namespace Codegen
         void visit(const Nodecl::IfElseStatement& node);
         void visit(const Nodecl::ForStatement& node);
         void visit(const Nodecl::FortranPrintStatement& node);
+        void visit(const Nodecl::FortranAllocateStatement& node);
         void visit(const Nodecl::WhileStatement& node);
         void visit(const Nodecl::SwitchStatement &node);
         void visit(const Nodecl::CaseStatement &node);
@@ -149,6 +150,9 @@ namespace Codegen
 
             LazyObjectPtr<llvm::Type> descriptor_dimension;
             std::map<int, llvm::Type*> array_descriptor;
+
+            LazyObjectPtr<llvm::Function> malloc;
+            LazyObjectPtr<llvm::Function> runtime_error_at;
         } gfortran_rt;
 
         struct LLVMTypes
@@ -220,6 +224,22 @@ namespace Codegen
         void initialize_llvm_types();
         void initialize_gfortran_runtime();
         llvm::Type* get_gfortran_array_descriptor_type(TL::Type t);
+        void gfortran_runtime_error(const locus_t *, const std::string &str);
+
+        void fill_descriptor_info(
+            int rank,
+            TL::Type element_type,
+            llvm::Value *descriptor_addr,
+            llvm::Value *base_address,
+            const std::vector<llvm::Value *> &lower_bounds,
+            const std::vector<llvm::Value *> &upper_bounds,
+            const std::vector<llvm::Value *> &strides);
+
+        void fill_descriptor_info(
+            TL::Type array_type,
+            llvm::Value *descriptor_addr,
+            llvm::Value *base_address,
+            const TL::ObjectList<Nodecl::NodeclBase> &array_sizes);
 
         // Debug info
         void push_debug_scope(llvm::DIScope *dbg_scope)
