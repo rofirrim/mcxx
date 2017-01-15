@@ -146,6 +146,9 @@ namespace Codegen
             LazyObjectPtr<llvm::Function> set_options;
 
             LazyObjectPtr<llvm::Function> stop_int;
+
+            LazyObjectPtr<llvm::Type> descriptor_dimension;
+            std::map<int, llvm::Type*> array_descriptor;
         } gfortran_rt;
 
         struct LLVMTypes
@@ -216,6 +219,7 @@ namespace Codegen
         void initialize_llvm_context();
         void initialize_llvm_types();
         void initialize_gfortran_runtime();
+        llvm::Type* get_gfortran_array_descriptor_type(TL::Type t);
 
         // Debug info
         void push_debug_scope(llvm::DIScope *dbg_scope)

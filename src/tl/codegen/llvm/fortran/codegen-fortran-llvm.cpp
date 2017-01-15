@@ -3020,10 +3020,16 @@ llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
                                     const_value_cast_to_8(size.get_constant()));
     }
     else if (t.is_fortran_array()
-            && t.array_is_vla())
+            && t.array_is_vla()
+            && !t.array_requires_descriptor())
     {
         // Use the base element type
         return get_llvm_type(t.array_base_element());
+    }
+    else if (t.is_fortran_array()
+            && t.array_requires_descriptor())
+    {
+        return get_gfortran_array_descriptor_type(t);
     }
     else
     {
@@ -3470,7 +3476,6 @@ void FortranLLVM::initialize_llvm_types()
  IOPARM_END(dt)
 
 
-// TODO - Make this a lazy mechanism so we create only what is needed
 void FortranLLVM::initialize_gfortran_runtime()
 {
     typedef std::vector<llvm::Type *> TL;
@@ -3629,6 +3634,74 @@ void FortranLLVM::initialize_gfortran_runtime()
                 "_gfortran_stop_numeric_f08",
                 current_module.get());
     };
+
+    this->gfortran_rt.descriptor_dimension = [&, this]() -> llvm::Type *
+    {
+        // struct descriptor_dimension
+        // {
+        //   ptrdiff_t stride;
+        //   ptrdiff_t lower_bound;
+        //   ptrdiff_t upper_bound;
+        // };
+        // FIXME - We need the right ptrdiff_t here
+        llvm::Type *pdiff = llvm_types.i64;
+        llvm::StructType *t
+            = llvm::StructType::create(llvm_context, "descriptor_dimension");
+        fields[t].add_field("stride");
+        fields[t].add_field("lower_bound");
+        fields[t].add_field("upper_bound");
+        t->setBody({pdiff, pdiff, pdiff});
+        return t;
+    };
+}
+
+llvm::Type* FortranLLVM::get_gfortran_array_descriptor_type(TL::Type t)
+{
+    ERROR_CONDITION(!t.is_fortran_array(), "Invalid type", 0);
+
+    int rank = t.fortran_rank();
+    TL::Type base_element = t.fortran_array_base_element();
+
+    auto it = gfortran_rt.array_descriptor.find(rank);
+    if (it == gfortran_rt.array_descriptor.end())
+        return it->second;
+
+    std::stringstream ss;
+    ss << "descriptor_rank_" << rank;
+    llvm::StructType *struct_type = llvm::StructType::create(llvm_context, ss.str());
+
+    // template <int Rank>
+    // struct descriptor
+    // {
+    //     void *base_addr;
+    //     size_t offset;
+    //     ptrdiff_t dtype;
+    //     descriptor_dimension dim[Rank];
+    // };
+
+    std::vector<llvm::Type *> field_types;
+    field_types.reserve(4);
+
+    fields[struct_type].add_field("base_addr");
+    field_types.push_back(llvm_types.ptr_i8);
+
+    fields[struct_type].add_field("offset");
+    // Fixme we need a sensible size_t here
+    field_types.push_back(llvm_types.i64);
+
+    fields[struct_type].add_field("dtype");
+    // Fixme we need a sensible ptrdiff_t here
+    field_types.push_back(llvm_types.i64);
+
+    fields[struct_type].add_field("dim");
+    field_types.push_back(
+        llvm::ArrayType::get(gfortran_rt.descriptor_dimension.get(), rank));
+
+    struct_type->setBody(field_types);
+
+    gfortran_rt.array_descriptor.insert(std::make_pair(rank, struct_type));
+
+    return struct_type;
 }
 
 void FortranLLVM::initialize_llvm_context()
