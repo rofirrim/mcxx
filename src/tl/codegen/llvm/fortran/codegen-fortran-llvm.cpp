@@ -3531,7 +3531,11 @@ void FortranLLVM::visit(const Nodecl::FortranAllocateStatement& node)
             not_allocated);
 
         set_current_block(already_allocated);
-        gfortran_runtime_error(alloc_it->get_locus(), "Array already allocated");
+        {
+            std::stringstream ss;
+            ss << "Array '" << symbol.get_name() << "' already allocated";
+            gfortran_runtime_error(alloc_it->get_locus(), ss.str());
+        }
         ir_builder->CreateBr(not_allocated); // This is to appease IR checker
 
         set_current_block(not_allocated);
@@ -3568,13 +3572,13 @@ void FortranLLVM::visit(const Nodecl::FortranDeallocateStatement& node)
         Nodecl::NodeclBase dealloc_sym = *dealloc_it;
         ERROR_CONDITION(!dealloc_sym.is<Nodecl::Symbol>(), "Invalid node", 0);
 
-        TL::Symbol sym = dealloc_sym.as<Nodecl::Symbol>().get_symbol();
+        TL::Symbol symbol = dealloc_sym.as<Nodecl::Symbol>().get_symbol();
 
-        if (sym.is_allocatable())
+        if (symbol.is_allocatable())
         {
             // ALLOCATABLE
         }
-        else if (sym.get_type().is_pointer())
+        else if (symbol.get_type().is_pointer())
         {
             // POINTER
             internal_error("Not implemented yet", 0);
@@ -3584,7 +3588,7 @@ void FortranLLVM::visit(const Nodecl::FortranDeallocateStatement& node)
             internal_error("Code unreachable", 0);
         }
 
-        llvm::Value *descriptor_addr = get_value(sym);
+        llvm::Value *descriptor_addr = get_value(symbol);
         llvm::Type *descriptor_type
             = descriptor_addr->getType()->getPointerElementType();
 
@@ -3606,7 +3610,11 @@ void FortranLLVM::visit(const Nodecl::FortranDeallocateStatement& node)
             not_deallocated);
 
         set_current_block(already_deallocated);
-        gfortran_runtime_error(dealloc_it->get_locus(), "Array already deallocated");
+        {
+            std::stringstream ss;
+            ss << "Array '" << symbol.get_name() << "' already deallocated";
+            gfortran_runtime_error(dealloc_it->get_locus(), ss.str());
+        }
         ir_builder->CreateBr(not_deallocated); // Appease IR checker
 
         set_current_block(not_deallocated);
@@ -3796,6 +3804,7 @@ void FortranLLVM::gfortran_runtime_error(const locus_t* locus, const std::string
 
     ir_builder->CreateCall(gfortran_rt.runtime_error_at.get(),
                            { ir_builder->CreateGlobalStringPtr(ss.str()),
+                             ir_builder->CreateGlobalStringPtr("%s"),
                              ir_builder->CreateGlobalStringPtr(str) });
 }
 
@@ -4081,7 +4090,7 @@ void FortranLLVM::initialize_gfortran_runtime()
                     { llvm_types.ptr_i8, llvm_types.ptr_i8 },
                     /* isVarArg */ true),
                 llvm::GlobalValue::ExternalLinkage,
-                "_gfortran_runtime_error",
+                "_gfortran_runtime_error_at",
                 current_module.get());
     };
 }
