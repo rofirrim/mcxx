@@ -2490,10 +2490,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     {
         FortranLLVM::TrackLocation loc(llvm_visitor, node);
 
-        // FIXME: Technically Fortran says that the operands are to be
-        // evaluated in the program order if they are inside a parenthesis. For
-        // now I do not know how to force such a thing in LLVM, so temporarily
-        // we will assume this is a no-op
+        // FIXME: Make sure the code preserves the integrity of the parentheses
+        // (i.e. (A + B) + C does not become A + (B + C)
         walk(node.get_nest());
     }
 
