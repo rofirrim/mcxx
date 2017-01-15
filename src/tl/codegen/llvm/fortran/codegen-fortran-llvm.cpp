@@ -3281,8 +3281,8 @@ void FortranLLVM::emit_variable(TL::Symbol sym)
         array_size = eval_size_of_array(t);
     }
 
-    llvm::Value *allocation = ir_builder->CreateAlloca(
-        get_llvm_type(sym.get_type()), array_size, sym.get_name());
+    llvm::Type *llvm_type = get_llvm_type(sym.get_type());
+    llvm::Value *allocation = ir_builder->CreateAlloca(llvm_type, array_size, sym.get_name());
     map_symbol_to_value(sym, allocation);
 
     llvm::DINode::DIFlags flags = llvm::DINode::FlagZero;
@@ -3305,6 +3305,28 @@ void FortranLLVM::emit_variable(TL::Symbol sym)
                 sym.get_column(),
                 get_debug_scope()),
             ir_builder->GetInsertBlock());
+
+    // If this variable is ALLOCATABLE or a POINTER it must be set to zero
+    if (sym.is_allocatable() || sym.get_type().is_pointer())
+    {
+        if ((sym.get_type().is_array()
+             && sym.get_type().array_requires_descriptor())
+            || (sym.get_type().is_pointer()
+                && sym.get_type().points_to().is_array()))
+        {
+            FortranLLVM::TrackLocation loc(this, sym.get_locus());
+            // This has created a descriptor. Set it to zero.
+            // FIXME - I think there is a zeroinitializer for these cases.
+            ir_builder->CreateStore(
+                ir_builder->CreateIntToPtr(get_integer_value_64(0),
+                                           llvm_types.ptr_i8),
+                gep_for_field(llvm_type, allocation, { "base_addr" }));
+        }
+        else
+        {
+            internal_error("Not implemented yet", 0);
+        }
+    }
 }
 
 void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
