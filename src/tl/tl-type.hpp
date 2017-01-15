@@ -585,6 +585,10 @@ namespace TL
             /*! See array_get_bounds for an explanation of the returned Nodecl::NodeclBase */
             void array_get_region_bounds(Nodecl::NodeclBase& region_lower, Nodecl::NodeclBase& region_upper) const;
 
+            //! This returns the bounds of the array region
+            /*! See array_get_bounds for an explanation of the returned Nodecl::NodeclBase */
+            void array_get_region_bounds(Nodecl::NodeclBase& region_lower, Nodecl::NodeclBase& region_upper, Nodecl::NodeclBase& stride) const;
+
             //! This returns the expression of the array region size
             Nodecl::NodeclBase array_get_region_size() const;
 

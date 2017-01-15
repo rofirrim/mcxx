@@ -768,6 +768,15 @@ namespace TL
         region_upper = array_type_get_region_upper_bound(_type_info);
     }
 
+    void Type::array_get_region_bounds(Nodecl::NodeclBase &region_lower,
+                                       Nodecl::NodeclBase &region_upper,
+                                       Nodecl::NodeclBase &stride) const
+    {
+        region_lower = array_type_get_region_lower_bound(_type_info);
+        region_upper = array_type_get_region_upper_bound(_type_info);
+        stride = array_type_get_region_stride(_type_info);
+    }
+
     Nodecl::NodeclBase Type::array_get_region_size() const
     {
         return array_type_get_region_size_expr(_type_info);

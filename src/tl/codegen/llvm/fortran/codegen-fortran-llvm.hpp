@@ -142,6 +142,7 @@ namespace Codegen
             LazyObjectPtr<llvm::Function> transfer_real_write;
             LazyObjectPtr<llvm::Function> transfer_complex_write;
             LazyObjectPtr<llvm::Function> transfer_logical_write;
+            LazyObjectPtr<llvm::Function> transfer_array_write;
             LazyObjectPtr<llvm::Function> st_write_done;
 
             LazyObjectPtr<llvm::Function> set_args;
@@ -242,6 +243,11 @@ namespace Codegen
             llvm::Value *descriptor_addr,
             llvm::Value *base_address,
             const TL::ObjectList<Nodecl::NodeclBase> &array_sizes);
+
+        void fill_descriptor_info(
+                TL::Type array_type,
+                llvm::Value *descriptor_addr,
+                llvm::Value *base_address);
 
         // Debug info
         void push_debug_scope(llvm::DIScope *dbg_scope)

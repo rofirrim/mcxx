@@ -12322,6 +12322,15 @@ extern inline const char* print_declarator(type_t* printed_declarator)
                     tmp_result = strappend(tmp_result, ":");
                     tmp_result = strappend(tmp_result, codegen_to_str(printed_declarator->array->region->upper_bound, 
                                 CURRENT_COMPILED_FILE->global_decl_context));
+                    if (!nodecl_is_null(printed_declarator->array->region->stride))
+                    {
+                        tmp_result = strappend(tmp_result, ", stride: ");
+                        tmp_result = strappend(
+                            tmp_result,
+                            codegen_to_str(
+                                printed_declarator->array->region->stride,
+                                CURRENT_COMPILED_FILE->global_decl_context));
+                    }
                     tmp_result = strappend(tmp_result, "]" );
                 }
                 tmp_result = strappend(tmp_result, " of ");

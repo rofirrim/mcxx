@@ -3416,6 +3416,43 @@ void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
             ir_builder->CreateCall(gfortran_rt.transfer_complex_write.get(),
                                    { dt_parm, expr, eval_sizeof(t.no_ref().complex_get_base_type()) });
         }
+        else if (t.no_ref().is_array()
+                 && !t.no_ref().array_requires_descriptor())
+        {
+            // Create a descriptor for this array
+            llvm::Type *descriptor_type = get_gfortran_array_descriptor_type(t.no_ref());
+            // Now create a temporary for it
+            llvm::Value *descriptor_addr = ir_builder->CreateAlloca(descriptor_type, nullptr);
+
+            // Get the address of the first element
+            llvm::Value *base_address = ir_builder->CreatePointerCast(
+                eval_expression(n), llvm_types.ptr_i8);
+
+            // Fill the descriptor
+            fill_descriptor_info(t.no_ref(), descriptor_addr, base_address);
+
+            llvm::Value* expr = ir_builder->CreatePointerCast(descriptor_addr, llvm_types.ptr_i8);
+
+            TL::Type base_type = t.no_ref().fortran_array_base_element();
+            llvm::Value *kind = nullptr, *charlen = nullptr;
+            if (base_type.is_fortran_character())
+            {
+                kind = get_integer_value_32(1);
+                // FIXME - Does not work with CHARACTER(LEN=*)
+                charlen = eval_length_of_character(base_type);
+            }
+            else
+            {
+                if (base_type.is_complex())
+                    base_type = base_type.complex_get_base_type();
+                kind = eval_sizeof(base_type);
+                charlen = get_integer_value_32(0);
+            }
+
+
+            ir_builder->CreateCall(gfortran_rt.transfer_array_write.get(),
+                                   { dt_parm, expr, kind, charlen });
+        }
         else
         {
             internal_error("Type '%s' not yet implemented",
@@ -3797,6 +3834,52 @@ void FortranLLVM::fill_descriptor_info(
                          strides);
 }
 
+void FortranLLVM::fill_descriptor_info(
+    TL::Type array_type,
+    llvm::Value *descriptor_addr,
+    llvm::Value *base_address)
+{
+    std::vector<llvm::Value *> lower_bounds;
+    std::vector<llvm::Value *> upper_bounds;
+    std::vector<llvm::Value *> strides;
+
+    TL::Type t = array_type;
+    while (t.is_fortran_array())
+    {
+        if (t.array_is_region())
+        {
+            Nodecl::NodeclBase lb, ub, stride;
+            t.array_get_region_bounds(lb, ub, stride);
+            lower_bounds.push_back(ir_builder->CreateZExtOrTrunc(
+                eval_expression(lb), llvm_types.i64));
+            upper_bounds.push_back(ir_builder->CreateZExtOrTrunc(
+                eval_expression(ub), llvm_types.i64));
+            strides.push_back(ir_builder->CreateZExtOrTrunc(
+                eval_expression(stride), llvm_types.i64));
+        }
+        else
+        {
+            Nodecl::NodeclBase lb, ub;
+            t.array_get_bounds(lb, ub);
+            lower_bounds.push_back(ir_builder->CreateZExtOrTrunc(
+                eval_expression(lb), llvm_types.i64));
+            upper_bounds.push_back(ir_builder->CreateZExtOrTrunc(
+                eval_expression(ub), llvm_types.i64));
+            strides.push_back(get_integer_value_64(1));
+        }
+
+        t = t.array_element();
+    }
+
+    return fill_descriptor_info(array_type.fortran_rank(),
+                                array_type.fortran_array_base_element(),
+                                descriptor_addr,
+                                base_address,
+                                lower_bounds,
+                                upper_bounds,
+                                strides);
+}
+
 void FortranLLVM::gfortran_runtime_error(const locus_t* locus, const std::string &str)
 {
     std::stringstream ss;
@@ -3998,6 +4081,19 @@ void FortranLLVM::initialize_gfortran_runtime()
                 current_module.get()); 
     };
 
+    this->gfortran_rt.transfer_array_write = [&, this]() { 
+        return llvm::Function::Create(
+                llvm::FunctionType::get(llvm_types.void_,
+                    { gfortran_rt.st_parameter_dt.get()->getPointerTo(),
+                    llvm_types.ptr_i8,
+                    llvm_types.i32,
+                    llvm_types.i32 },
+                    /* isVarArg */ false),
+                llvm::GlobalValue::ExternalLinkage,
+                "_gfortran_transfer_array_write",
+                current_module.get()); 
+    };
+
     this->gfortran_rt.st_write_done = [&, this]() { 
         return llvm::Function::Create(
                 llvm::FunctionType::get(llvm_types.void_,
@@ -4100,7 +4196,6 @@ llvm::Type* FortranLLVM::get_gfortran_array_descriptor_type(TL::Type t)
     ERROR_CONDITION(!t.is_fortran_array(), "Invalid type", 0);
 
     int rank = t.fortran_rank();
-    TL::Type base_element = t.fortran_array_base_element();
 
     auto it = gfortran_rt.array_descriptor.find(rank);
     if (it != gfortran_rt.array_descriptor.end())
