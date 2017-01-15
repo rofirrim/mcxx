@@ -823,7 +823,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     {
         // FIXME - Use the easiest of the two to compute
         llvm::Value *dim_idx = llvm_visitor->ir_builder->CreateAlloca(llvm_visitor->llvm_types.i64, nullptr, "array_op_idx.addr");
-        llvm::Value *dim_size = llvm_visitor->evaluate_elements_of_dimension(lhs_type);
+        llvm::Value *dim_size = llvm_visitor->eval_elements_of_dimension(lhs_type);
 
         create_array_op_loop(
             dim_idx,
@@ -948,8 +948,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 // FIXME - What about substrings?
 
                 // Compute the minimum length of characters to transfer from rhs to lhs
-                llvm::Value *size_lhs = llvm_visitor->evaluate_length_of_character(lhs_type.no_ref());
-                llvm::Value *size_rhs = llvm_visitor->evaluate_length_of_character(rhs_type);
+                llvm::Value *size_lhs = llvm_visitor->eval_length_of_character(lhs_type.no_ref());
+                llvm::Value *size_rhs = llvm_visitor->eval_length_of_character(rhs_type);
 
                 llvm::Value *min_size = llvm_visitor->ir_builder->CreateSelect(
                         llvm_visitor->ir_builder->CreateICmpSLT(size_lhs, size_rhs),
@@ -1190,7 +1190,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         }
         else if (t.array_is_region())
         {
-            // The idea is that evaluate_elements_of_dimension has taken into
+            // The idea is that eval_elements_of_dimension has taken into
             // account the array subscript, so given an array subscript
             // A(L:U:S) and an index I the address we want to compute is L + I
             // * S, if S > 0, or U + I * S, if S < 0.
@@ -1329,7 +1329,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
         // FIXME - Use the easiest of the two to compute
         llvm::Value *dim_idx = llvm_visitor->ir_builder->CreateAlloca(llvm_visitor->llvm_types.i64);
-        llvm::Value *dim_size = llvm_visitor->evaluate_elements_of_dimension(lhs_type);
+        llvm::Value *dim_size = llvm_visitor->eval_elements_of_dimension(lhs_type);
 
         create_array_op_loop(
             dim_idx,
@@ -1464,7 +1464,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
         // TODO: Select easiest of the two to compute
         llvm::Value *array_size
-            = llvm_visitor->evaluate_elements_of_array(lhs_type);
+            = llvm_visitor->eval_elements_of_array(lhs_type);
 
         // As these are array operands, their LLVM  values will be addresses
         // to the first element.
@@ -1855,8 +1855,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                     Nodecl::NodeclBase lhs, Nodecl::NodeclBase rhs,
                     llvm::Value *vlhs, llvm::Value *vrhs)
             {
-                llvm::Value *len_lhs = llvm_visitor->evaluate_length_of_character(lhs.get_type());
-                llvm::Value *len_rhs = llvm_visitor->evaluate_length_of_character(rhs.get_type());
+                llvm::Value *len_lhs = llvm_visitor->eval_length_of_character(lhs.get_type());
+                llvm::Value *len_rhs = llvm_visitor->eval_length_of_character(rhs.get_type());
 
                 llvm::Value *len_min = llvm_visitor->ir_builder->CreateSelect(
                         llvm_visitor->ir_builder->CreateICmpSLT(len_lhs, len_rhs),
@@ -2015,8 +2015,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                     Nodecl::NodeclBase lhs, Nodecl::NodeclBase rhs,
                     llvm::Value *vlhs, llvm::Value *vrhs)
             {
-                llvm::Value *len_lhs = llvm_visitor->evaluate_length_of_character(lhs.get_type());
-                llvm::Value *len_rhs = llvm_visitor->evaluate_length_of_character(rhs.get_type());
+                llvm::Value *len_lhs = llvm_visitor->eval_length_of_character(lhs.get_type());
+                llvm::Value *len_rhs = llvm_visitor->eval_length_of_character(rhs.get_type());
 
                 llvm::Value *len_min = llvm_visitor->ir_builder->CreateSelect(
                         llvm_visitor->ir_builder->CreateICmpSLT(len_lhs, len_rhs),
@@ -2207,8 +2207,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                     Nodecl::NodeclBase lhs, Nodecl::NodeclBase rhs,
                     llvm::Value *vlhs, llvm::Value *vrhs)
             {
-                llvm::Value *len_lhs = llvm_visitor->evaluate_length_of_character(lhs.get_type());
-                llvm::Value *len_rhs = llvm_visitor->evaluate_length_of_character(rhs.get_type());
+                llvm::Value *len_lhs = llvm_visitor->eval_length_of_character(lhs.get_type());
+                llvm::Value *len_rhs = llvm_visitor->eval_length_of_character(rhs.get_type());
 
                 llvm::Value *len_min = llvm_visitor->ir_builder->CreateSelect(
                         llvm_visitor->ir_builder->CreateICmpSLT(len_lhs, len_rhs),
@@ -2405,13 +2405,13 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 lhs_type = lhs_type.array_element();
 
             // TODO - CHARACTER(LEN=*) is special as it uses a hidden parameter
-            llvm::Value *lhs_elements = llvm_visitor->evaluate_length_of_character(lhs_type);
+            llvm::Value *lhs_elements = llvm_visitor->eval_length_of_character(lhs_type);
 
             TL::Type rhs_type = rhs.get_type();
             while (rhs_type.is_fortran_array())
                 rhs_type = rhs_type.array_element();
 
-            llvm::Value *rhs_elements = llvm_visitor->evaluate_length_of_character(rhs_type);
+            llvm::Value *rhs_elements = llvm_visitor->eval_length_of_character(rhs_type);
 
             llvm::Value *total_elements = llvm_visitor->ir_builder->CreateAdd(lhs_elements, rhs_elements);
 
@@ -2845,7 +2845,7 @@ llvm::Value *FortranLLVM::eval_sizeof_64(TL::Type t)
 {
     if (t.is_fortran_array())
     {
-        return ir_builder->CreateMul(evaluate_size_of_array(t),
+        return ir_builder->CreateMul(eval_size_of_array(t),
                                      eval_sizeof_64(t.array_base_element()));
     }
     else
@@ -3141,7 +3141,7 @@ llvm::DIType *FortranLLVM::get_debug_info_type(TL::Type t)
     }
 }
 
-llvm::Value* FortranLLVM::evaluate_size_of_dimension(TL::Type t)
+llvm::Value* FortranLLVM::eval_size_of_dimension(TL::Type t)
 {
     ERROR_CONDITION(!t.is_fortran_array(), "Invalid type", 0);
 
@@ -3158,7 +3158,7 @@ llvm::Value* FortranLLVM::evaluate_size_of_dimension(TL::Type t)
     return current_size;
 }
 
-llvm::Value* FortranLLVM::evaluate_size_of_array(TL::Type t)
+llvm::Value* FortranLLVM::eval_size_of_array(TL::Type t)
 {
     ERROR_CONDITION(!t.is_fortran_array(), "Invalid type", 0);
     if (t.array_requires_descriptor())
@@ -3170,7 +3170,7 @@ llvm::Value* FortranLLVM::evaluate_size_of_array(TL::Type t)
         llvm::Value *val_size = nullptr;
         while (t.is_fortran_array())
         {
-            llvm::Value *current_size = evaluate_size_of_dimension(t);
+            llvm::Value *current_size = eval_size_of_dimension(t);
 
             if (val_size == nullptr)
                 val_size = current_size;
@@ -3184,7 +3184,7 @@ llvm::Value* FortranLLVM::evaluate_size_of_array(TL::Type t)
     }
 }
 
-llvm::Value *FortranLLVM::evaluate_length_of_character(TL::Type t)
+llvm::Value *FortranLLVM::eval_length_of_character(TL::Type t)
 {
     // FIXME - CHARACTER(LEN=*)
     ERROR_CONDITION(!t.is_fortran_character(), "Invalid type", 0);
@@ -3193,7 +3193,7 @@ llvm::Value *FortranLLVM::evaluate_length_of_character(TL::Type t)
     return val_size;
 }
 
-llvm::Value* FortranLLVM::evaluate_elements_of_dimension(TL::Type t)
+llvm::Value* FortranLLVM::eval_elements_of_dimension(TL::Type t)
 {
     ERROR_CONDITION(!t.is_fortran_array(), "Invalid type", 0);
 
@@ -3234,7 +3234,7 @@ llvm::Value* FortranLLVM::evaluate_elements_of_dimension(TL::Type t)
     return current_size;
 }
 
-llvm::Value* FortranLLVM::evaluate_elements_of_array(TL::Type t)
+llvm::Value* FortranLLVM::eval_elements_of_array(TL::Type t)
 {
     ERROR_CONDITION(!t.is_fortran_array(), "Invalid type", 0);
     if (t.array_requires_descriptor())
@@ -3246,7 +3246,7 @@ llvm::Value* FortranLLVM::evaluate_elements_of_array(TL::Type t)
         llvm::Value *val_size = nullptr;
         while (t.is_fortran_array())
         {
-            llvm::Value *current_size = evaluate_elements_of_dimension(t);
+            llvm::Value *current_size = eval_elements_of_dimension(t);
 
             if (val_size == nullptr)
                 val_size = current_size;
@@ -3275,7 +3275,7 @@ void FortranLLVM::emit_variable(TL::Symbol sym)
         TrackLocation loc(this, sym.get_locus());
 
         TL::Type t = sym.get_type();
-        array_size = evaluate_size_of_array(t);
+        array_size = eval_size_of_array(t);
     }
 
     llvm::Value *allocation = ir_builder->CreateAlloca(

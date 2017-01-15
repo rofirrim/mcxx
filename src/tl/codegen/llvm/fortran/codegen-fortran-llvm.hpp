@@ -335,13 +335,13 @@ namespace Codegen
         void emit_variable(TL::Symbol sym);
 
         // Takes into account region arrays
-        llvm::Value* evaluate_elements_of_dimension(TL::Type t);
-        llvm::Value* evaluate_elements_of_array(TL::Type sym);
+        llvm::Value* eval_elements_of_dimension(TL::Type t);
+        llvm::Value* eval_elements_of_array(TL::Type sym);
 
         // Only considers array types
-        llvm::Value* evaluate_size_of_dimension(TL::Type t);
-        llvm::Value* evaluate_size_of_array(TL::Type sym);
-        llvm::Value* evaluate_length_of_character(TL::Type sym);
+        llvm::Value* eval_size_of_dimension(TL::Type t);
+        llvm::Value* eval_size_of_array(TL::Type sym);
+        llvm::Value* eval_length_of_character(TL::Type sym);
 
         llvm::Value *gep_for_field(
             llvm::Type *struct_type,
