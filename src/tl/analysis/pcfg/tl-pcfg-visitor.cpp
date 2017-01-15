@@ -1153,12 +1153,13 @@ next_it:    ;
 
         if(expression_nodes.size() > 0)
         {
-            // When the size of expression_nodes list is >1, the expression contained contains a comma operator.
+            // When the size of expression_nodes list is >1, the expression
+            // contained contains a comma operator.
             // Otherwise, the expression is any other kind of expression
-            Node* last_node;
-            if(expression_nodes.size() == 1)
+            Node *last_node;
+            if (expression_nodes.size() == 1)
                 last_node = expression_nodes[0];
-            else        // expression_nodes.size() > 1
+            else // expression_nodes.size() > 1
                 last_node = merge_nodes(n, expression_nodes);
 
             // Connect the partial node created recursively with the piece of Graph build until this moment

@@ -239,20 +239,21 @@ namespace Utils {
     
     bool nodecl_set_contains_nodecl(const NBase& nodecl, const NodeclSet& set)
     {
-        for(NodeclSet::const_iterator it = set.begin(); it != set.end(); ++it)
-            if(Nodecl::Utils::structurally_equal_nodecls(nodecl, *it, /*skip_conversions*/true))
+        for (NodeclSet::const_iterator it = set.begin(); it != set.end(); ++it)
+            if (Nodecl::Utils::structurally_equal_nodecls(
+                    nodecl, *it, /*skip_conversions*/ true))
                 return true;
         return false;
     }
-    
+
     bool nodecl_set_contains_nodecl_pointer(const NBase& nodecl, const NodeclSet& set)
     {
-        for(NodeclSet::const_iterator it = set.begin(); it != set.end(); ++it)
-            if(nodecl == *it)
+        for (NodeclSet::const_iterator it = set.begin(); it != set.end(); ++it)
+            if (nodecl == *it)
                 return true;
         return false;
     }
-    
+
     static NBase nodecl_set_contains_enclosing_nodecl_rec(const NBase& n, const NodeclSet& set)
     {
         const Nodecl::NodeclBase& m = n.no_conv();
