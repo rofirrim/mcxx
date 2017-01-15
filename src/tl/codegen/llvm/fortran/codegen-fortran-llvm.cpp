@@ -2495,125 +2495,221 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         walk(node.get_nest());
     }
 
+    llvm::Value *address_of_subscripted_array_no_descriptor(
+        const Nodecl::ArraySubscript &node)
+    {
+        Nodecl::NodeclBase subscripted = node.get_subscripted();
+        TL::Type subscripted_type = subscripted.get_type();
+        TL::Type subscripted_type_noref = subscripted_type.no_ref();
+
+        bool is_vla = subscripted_type_noref.array_is_vla();
+
+        Nodecl::List subscripts = node.get_subscripts().as<Nodecl::List>();
+        std::vector<llvm::Value *> offset_list, size_list;
+        if (is_vla)
+        {
+            offset_list.reserve(subscripts.size());
+            size_list.reserve(subscripts.size());
+        }
+        else
+        {
+            offset_list.reserve(subscripts.size() + 1);
+            offset_list.push_back(llvm_visitor->get_integer_value_32(0));
+        }
+
+        TL::Type current_array_type = subscripted_type_noref;
+        for (Nodecl::NodeclBase index : subscripts)
+        {
+            Nodecl::NodeclBase lower, upper;
+            current_array_type.array_get_bounds(lower, upper);
+            llvm::Value *val_lower
+                = llvm_visitor->ir_builder->CreateSExtOrTrunc(
+                    llvm_visitor->eval_expression(lower),
+                    llvm_visitor->llvm_types.i64);
+            llvm::Value *val_upper
+                = llvm_visitor->ir_builder->CreateSExtOrTrunc(
+                    llvm_visitor->eval_expression(upper),
+                    llvm_visitor->llvm_types.i64);
+
+            ERROR_CONDITION(
+                index.is<Nodecl::Range>(), "Invalid subscript here", 0);
+            llvm::Value *val_idx = llvm_visitor->ir_builder->CreateSExtOrTrunc(
+                llvm_visitor->eval_expression(index),
+                llvm_visitor->llvm_types.i64);
+
+            llvm::Value *val_offset
+                = llvm_visitor->ir_builder->CreateSub(val_idx, val_lower);
+            offset_list.push_back(val_offset);
+
+            if (is_vla)
+            {
+                llvm::Value *val_size = llvm_visitor->ir_builder->CreateAdd(
+                    llvm_visitor->ir_builder->CreateSub(val_upper, val_lower),
+                    llvm_visitor->get_integer_value_64(1));
+                size_list.push_back(val_size);
+            }
+
+            current_array_type = current_array_type.array_element();
+        }
+
+        llvm::Value *subscripted_val
+            = llvm_visitor->eval_expression(subscripted);
+        if (!is_vla)
+        {
+            // For constant sized arrays use a GEP
+            return llvm_visitor->ir_builder->CreateGEP(subscripted_val,
+                                                       offset_list);
+        }
+        else
+        {
+            // Otherwise just compute an offset in elements using Horner's rule.
+            std::vector<llvm::Value *>::iterator it_offsets
+                = offset_list.begin();
+            std::vector<llvm::Value *>::iterator it_sizes = size_list.begin();
+
+            llvm::Value *val_addr = *it_offsets;
+            it_offsets++;
+            it_sizes++;
+
+            while (it_offsets != offset_list.end()
+                   && it_sizes != size_list.end())
+            {
+                val_addr = llvm_visitor->ir_builder->CreateAdd(
+                    *it_offsets,
+                    llvm_visitor->ir_builder->CreateMul(*it_sizes, val_addr));
+
+                it_offsets++;
+                it_sizes++;
+            }
+            ERROR_CONDITION(it_offsets != offset_list.end()
+                                || it_sizes != size_list.end(),
+                            "Lists do not match",
+                            0);
+
+            // Now multiply by the size of the type to get an offset in bytes
+            ERROR_CONDITION(current_array_type.is_fortran_array(),
+                            "Should not be an array here",
+                            0);
+            val_addr = llvm_visitor->ir_builder->CreateMul(
+                val_addr, llvm_visitor->eval_sizeof_64(current_array_type));
+
+            // And add this offset in bytes to the base
+            val_addr = llvm_visitor->ir_builder->CreateAdd(
+                llvm_visitor->ir_builder->CreatePtrToInt(
+                    subscripted_val, llvm_visitor->llvm_types.i64),
+                val_addr);
+
+            return llvm_visitor->ir_builder->CreateIntToPtr(
+                val_addr, subscripted_val->getType());
+        }
+    }
+
+    llvm::Value *address_of_subscripted_array_descriptor(
+        const Nodecl::ArraySubscript &node)
+    {
+        Nodecl::NodeclBase subscripted = node.get_subscripted();
+        TL::Type subscripted_type = subscripted.get_type();
+        TL::Type subscripted_type_noref = subscripted_type.no_ref();
+
+        llvm::Value *descriptor_addr
+            = llvm_visitor->eval_expression(subscripted);
+        llvm::Type *descriptor_type
+            = descriptor_addr->getType()->getPointerElementType();
+
+        llvm::Value *offset_value
+            = llvm_visitor->ir_builder->CreateLoad(llvm_visitor->gep_for_field(
+                descriptor_type, descriptor_addr, { "offset" }));
+
+        Nodecl::List subscripts_tree = node.get_subscripts().as<Nodecl::List>();
+        // Reverse subscripts as in the tree are represented in the C order
+        TL::ObjectList<Nodecl::NodeclBase> subscripts(subscripts_tree.rbegin(),
+                                                      subscripts_tree.rend());
+
+        llvm::Type *descriptor_dimension
+            = llvm_visitor->gfortran_rt.descriptor_dimension.get();
+
+        llvm::Value *linear_index = nullptr;
+        int rank = 0;
+        for (TL::ObjectList<Nodecl::NodeclBase>::iterator it
+             = subscripts.begin();
+             it != subscripts.end();
+             it++, rank++)
+        {
+            llvm::Value *current = llvm_visitor->ir_builder->CreateMul(
+                llvm_visitor->ir_builder->CreateZExtOrTrunc(
+                    llvm_visitor->eval_expression(*it),
+                    llvm_visitor->llvm_types.i64),
+                llvm_visitor->ir_builder->CreateLoad(
+                    llvm_visitor->ir_builder->CreateGEP(
+                        descriptor_addr,
+                        { llvm_visitor->get_integer_value_32(0),
+                          llvm_visitor->get_integer_value_32(
+                              llvm_visitor->fields[descriptor_type]["dim"]),
+                          llvm_visitor->get_integer_value_32(rank),
+                          llvm_visitor->get_integer_value_32(
+                              llvm_visitor->fields[descriptor_dimension]
+                                                  ["stride"]) })));
+
+            if (linear_index == nullptr)
+                linear_index = current;
+            else
+                linear_index = llvm_visitor->ir_builder->CreateAdd(linear_index,
+                                                                   current);
+        }
+
+        linear_index
+            = llvm_visitor->ir_builder->CreateAdd(linear_index, offset_value);
+
+        TL::Type element_type
+            = subscripted_type_noref.fortran_array_base_element();
+        linear_index = llvm_visitor->ir_builder->CreateMul(
+            linear_index,
+            llvm_visitor->get_integer_value_64(element_type.get_size()));
+
+        llvm::Value *address = llvm_visitor->ir_builder->CreatePointerCast(
+            add_offset_to_address(
+                llvm_visitor->ir_builder->CreateLoad(
+                    llvm_visitor->gep_for_field(
+                        descriptor_type, descriptor_addr, { "base_addr" })),
+                linear_index),
+            llvm::PointerType::get(llvm_visitor->get_llvm_type(element_type),
+                                   /* AddressSpace */ 0));
+
+        return address;
+    }
+
     void visit(const Nodecl::ArraySubscript& node)
     {
         Nodecl::NodeclBase subscripted = node.get_subscripted();
         TL::Type subscripted_type = subscripted.get_type();
         TL::Type subscripted_type_noref = subscripted_type.no_ref();
 
-        // TODO: Substrings use thise node too
-        ERROR_CONDITION(
-            !subscripted_type_noref.is_fortran_array(), "Expecting an array here", 0);
+        // FIXME: Substrings use this node too
+        ERROR_CONDITION(!subscripted_type_noref.is_fortran_array(),
+                        "Expecting an array here",
+                        0);
 
         if (subscripted_type_noref.array_requires_descriptor())
         {
-            internal_error("Not yet implemented", 0);
+            if (node.get_type().no_ref().is_fortran_array()
+                && node.get_type().no_ref().array_is_region())
+                internal_error("Not yet implemented", 0);
+
+            value = address_of_subscripted_array_descriptor(node);
         }
         else if (node.get_type().no_ref().is_fortran_array()
-                && node.get_type().no_ref().array_is_region())
+                 && node.get_type().no_ref().array_is_region())
         {
             llvm::Value *subscripted_val
                 = llvm_visitor->eval_expression(subscripted);
-            // We will compute everything based on the region described in the type
+            // We will compute everything based on the region described in the
+            // type
             value = subscripted_val;
         }
         else
         {
-            bool is_vla = subscripted_type_noref.array_is_vla();
-
-            Nodecl::List subscripts = node.get_subscripts().as<Nodecl::List>();
-            std::vector<llvm::Value *> offset_list, size_list;
-            if (is_vla)
-            {
-                offset_list.reserve(subscripts.size());
-                size_list.reserve(subscripts.size());
-            }
-            else
-            {
-                offset_list.reserve(subscripts.size() + 1);
-                offset_list.push_back(llvm_visitor->get_integer_value_32(0));
-            }
-
-            TL::Type current_array_type = subscripted_type_noref;
-            for (Nodecl::NodeclBase index : subscripts)
-            {
-                Nodecl::NodeclBase lower, upper;
-                current_array_type.array_get_bounds(lower, upper);
-                llvm::Value *val_lower
-                    = llvm_visitor->ir_builder->CreateSExtOrTrunc(
-                        llvm_visitor->eval_expression(lower),
-                        llvm_visitor->llvm_types.i64);
-                llvm::Value *val_upper
-                    = llvm_visitor->ir_builder->CreateSExtOrTrunc(
-                        llvm_visitor->eval_expression(upper),
-                        llvm_visitor->llvm_types.i64);
-
-                ERROR_CONDITION(index.is<Nodecl::Range>(), "Invalid subscript here", 0);
-                llvm::Value *val_idx
-                    = llvm_visitor->ir_builder->CreateSExtOrTrunc(
-                        llvm_visitor->eval_expression(index),
-                        llvm_visitor->llvm_types.i64);
-
-                llvm::Value *val_offset
-                    = llvm_visitor->ir_builder->CreateSub(val_idx, val_lower);
-                offset_list.push_back(val_offset);
-
-                if (is_vla)
-                {
-                    llvm::Value *val_size = llvm_visitor->ir_builder->CreateAdd(
-                        llvm_visitor->ir_builder->CreateSub(val_upper,
-                                                            val_lower),
-                        llvm_visitor->get_integer_value_64(1));
-                    size_list.push_back(val_size);
-                }
-
-                current_array_type = current_array_type.array_element();
-            }
-
-            llvm::Value *subscripted_val
-                = llvm_visitor->eval_expression(subscripted);
-            if (!is_vla)
-            {
-                // For constant sized arrays use a GEP
-                value = llvm_visitor->ir_builder->CreateGEP(subscripted_val,
-                                                            offset_list);
-            }
-            else
-            {
-                // Otherwise just compute an offset in elements using Horner's rule.
-                std::vector<llvm::Value *>::iterator it_offsets = offset_list.begin();
-                std::vector<llvm::Value *>::iterator it_sizes = size_list.begin();
-
-                llvm::Value* val_addr = *it_offsets;
-                it_offsets++;
-                it_sizes++;
-
-                while (it_offsets != offset_list.end()
-                       && it_sizes != size_list.end())
-                {
-                    val_addr = llvm_visitor->ir_builder->CreateAdd(
-                        *it_offsets,
-                        llvm_visitor->ir_builder->CreateMul(*it_sizes, val_addr));
-
-                    it_offsets++;
-                    it_sizes++;
-                }
-                ERROR_CONDITION(it_offsets != offset_list.end()
-                                    || it_sizes != size_list.end(),
-                                "Lists do not match", 0);
-
-                // Now multiply by the size of the type to get an offset in bytes
-                ERROR_CONDITION(current_array_type.is_fortran_array(), "Should not be an array here", 0);
-                val_addr = llvm_visitor->ir_builder->CreateMul(val_addr, llvm_visitor->eval_sizeof_64(current_array_type));
-
-                // And add this offset in bytes to the base
-                val_addr = llvm_visitor->ir_builder->CreateAdd(
-                    llvm_visitor->ir_builder->CreatePtrToInt(
-                        subscripted_val, llvm_visitor->llvm_types.i64),
-                    val_addr);
-
-                value = llvm_visitor->ir_builder->CreateIntToPtr(val_addr, subscripted_val->getType());
-            }
+            // We compute the address of this element
+            value = address_of_subscripted_array_no_descriptor(node);
         }
     }
 
@@ -3453,6 +3549,33 @@ void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
             ir_builder->CreateCall(gfortran_rt.transfer_array_write.get(),
                                    { dt_parm, expr, kind, charlen });
         }
+        else if (t.no_ref().is_array()
+                 && t.no_ref().array_requires_descriptor())
+        {
+            llvm::Value* expr = eval_expression(n);
+            // This should be the address of the descriptor already
+            expr = ir_builder->CreatePointerCast(expr, llvm_types.ptr_i8);
+
+            TL::Type base_type = t.no_ref().fortran_array_base_element();
+            llvm::Value *kind = nullptr, *charlen = nullptr;
+            if (base_type.is_fortran_character())
+            {
+                kind = get_integer_value_32(1);
+                // FIXME - Does not work with CHARACTER(LEN=*)
+                charlen = eval_length_of_character(base_type);
+            }
+            else
+            {
+                if (base_type.is_complex())
+                    base_type = base_type.complex_get_base_type();
+                kind = eval_sizeof(base_type);
+                charlen = get_integer_value_32(0);
+            }
+
+
+            ir_builder->CreateCall(gfortran_rt.transfer_array_write.get(),
+                                   { dt_parm, expr, kind, charlen });
+        }
         else
         {
             internal_error("Type '%s' not yet implemented",
@@ -3713,6 +3836,11 @@ void FortranLLVM::fill_descriptor_info(int rank,
                 ir_builder->CreateMul(lower_bounds[i], descr_strides[i]));
         }
     }
+
+    // Negate offset_value
+    offset_value = ir_builder->CreateSub(
+            get_integer_value_64(0),
+            offset_value);
 
     // base_address
     ir_builder->CreateStore(base_address, field_addr_base_address);
