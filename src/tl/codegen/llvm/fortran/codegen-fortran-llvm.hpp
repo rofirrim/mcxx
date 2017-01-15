@@ -88,6 +88,7 @@ namespace Codegen
         void visit(const Nodecl::ForStatement& node);
         void visit(const Nodecl::FortranPrintStatement& node);
         void visit(const Nodecl::FortranAllocateStatement& node);
+        void visit(const Nodecl::FortranDeallocateStatement& node);
         void visit(const Nodecl::WhileStatement& node);
         void visit(const Nodecl::SwitchStatement &node);
         void visit(const Nodecl::CaseStatement &node);
@@ -152,6 +153,7 @@ namespace Codegen
             std::map<int, llvm::Type*> array_descriptor;
 
             LazyObjectPtr<llvm::Function> malloc;
+            LazyObjectPtr<llvm::Function> free;
             LazyObjectPtr<llvm::Function> runtime_error_at;
         } gfortran_rt;
 
@@ -167,9 +169,9 @@ namespace Codegen
             llvm::Type* f64;
 
             llvm::Type* void_;
-            llvm::Type* ptr_i8;
-            llvm::Type* ptr_i32;
-            llvm::Type* ptr_i64;
+            llvm::PointerType* ptr_i8;
+            llvm::PointerType* ptr_i32;
+            llvm::PointerType* ptr_i64;
         } llvm_types;
 
         std::map<llvm::Type*, FieldMap> fields;

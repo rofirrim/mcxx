@@ -3318,8 +3318,7 @@ void FortranLLVM::emit_variable(TL::Symbol sym)
             // This has created a descriptor. Set it to zero.
             // FIXME - I think there is a zeroinitializer for these cases.
             ir_builder->CreateStore(
-                ir_builder->CreateIntToPtr(get_integer_value_64(0),
-                                           llvm_types.ptr_i8),
+                llvm::ConstantPointerNull::get(llvm_types.ptr_i8),
                 gep_for_field(llvm_type, allocation, { "base_addr" }));
         }
         else
@@ -3429,12 +3428,14 @@ void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
 
 void FortranLLVM::visit(const Nodecl::FortranAllocateStatement& node)
 {
+    // FIXME - We have to honour the options
     Nodecl::List items = node.get_items().as<Nodecl::List>();
 
     for (Nodecl::List::iterator alloc_it = items.begin();
          alloc_it != items.end();
          alloc_it++)
     {
+        TrackLocation loc(this, *alloc_it);
         // The representation of this node (ab)uses expressions to represent
         // the allocation items, fortunately for us the subscripted item should
         // already be an ALLOCATABLE or POINTER array. Note that for the case
@@ -3550,6 +3551,71 @@ void FortranLLVM::visit(const Nodecl::FortranAllocateStatement& node)
                 /* descriptor addr  */ descriptor_addr,
                 /* base_address */ malloc_call, 
                 array_sizes);
+    }
+}
+
+void FortranLLVM::visit(const Nodecl::FortranDeallocateStatement& node)
+{
+    // FIXME - We have to honour the options
+    Nodecl::List items = node.get_items().as<Nodecl::List>();
+
+    for (Nodecl::List::iterator dealloc_it = items.begin();
+         dealloc_it != items.end();
+         dealloc_it++)
+    {
+        TrackLocation loc(this, *dealloc_it);
+
+        Nodecl::NodeclBase dealloc_sym = *dealloc_it;
+        ERROR_CONDITION(!dealloc_sym.is<Nodecl::Symbol>(), "Invalid node", 0);
+
+        TL::Symbol sym = dealloc_sym.as<Nodecl::Symbol>().get_symbol();
+
+        if (sym.is_allocatable())
+        {
+            // ALLOCATABLE
+        }
+        else if (sym.get_type().is_pointer())
+        {
+            // POINTER
+            internal_error("Not implemented yet", 0);
+        }
+        else
+        {
+            internal_error("Code unreachable", 0);
+        }
+
+        llvm::Value *descriptor_addr = get_value(sym);
+        llvm::Type *descriptor_type
+            = descriptor_addr->getType()->getPointerElementType();
+
+        llvm::Value *field_addr_base_addr
+            = gep_for_field(descriptor_type, descriptor_addr, { "base_addr" });
+
+        llvm::BasicBlock *already_deallocated = llvm::BasicBlock::Create(
+            llvm_context, "allocate.already_deallocated", get_current_function());
+        llvm::BasicBlock *not_deallocated = llvm::BasicBlock::Create(
+            llvm_context, "allocate.not_deallocated", get_current_function());
+
+        ir_builder->CreateCondBr(
+            ir_builder->CreateICmpEQ(
+                ir_builder->CreatePtrToInt(
+                    ir_builder->CreateLoad(field_addr_base_addr),
+                    llvm_types.i64),
+                get_integer_value_64(0)),
+            already_deallocated,
+            not_deallocated);
+
+        set_current_block(already_deallocated);
+        gfortran_runtime_error(dealloc_it->get_locus(), "Array already deallocated");
+        ir_builder->CreateBr(not_deallocated); // Appease IR checker
+
+        set_current_block(not_deallocated);
+        ir_builder->CreateCall(
+            gfortran_rt.free.get(),
+            { ir_builder->CreateLoad(field_addr_base_addr) });
+        ir_builder->CreateStore(
+            llvm::ConstantPointerNull::get(llvm_types.ptr_i8),
+            field_addr_base_addr);
     }
 }
 
@@ -3994,6 +4060,17 @@ void FortranLLVM::initialize_gfortran_runtime()
                     /* isVarArg */ false),
                 llvm::GlobalValue::ExternalLinkage,
                 "malloc",
+                current_module.get());
+    };
+
+    this->gfortran_rt.free = [&, this]()
+    {
+        return llvm::Function::Create(
+                llvm::FunctionType::get(llvm_types.void_,
+                    { llvm_types.ptr_i8 },
+                    /* isVarArg */ false),
+                llvm::GlobalValue::ExternalLinkage,
+                "free",
                 current_module.get());
     };
 
