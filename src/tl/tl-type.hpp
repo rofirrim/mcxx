@@ -554,6 +554,9 @@ namespace TL
             // Returns the base element of the array
             TL::Type array_base_element() const;
 
+            // Ditto for Fortran arrays
+            TL::Type fortran_array_base_element() const;
+
             //! States whether the frontend flagged this array as requiring an in-memory descriptor
             /*!
              * This only happens in Fortran for some array kinds

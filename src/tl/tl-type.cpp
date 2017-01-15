@@ -627,6 +627,11 @@ namespace TL
         return result;
     }
 
+    Type Type::fortran_array_base_element() const
+    {
+        return fortran_get_rank0_type(this->_type_info);
+    }
+
     bool Type::array_is_vla() const
     {
         return array_type_is_vla(_type_info);
