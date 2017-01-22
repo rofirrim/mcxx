@@ -56,15 +56,10 @@ std::string CodegenVisitor::codegen_to_str(const Nodecl::NodeclBase& n, TL::Scop
     CURRENT_CONFIGURATION->line_markers = 0;
 
     std::stringstream out;
-    bool was_file_output = this->is_file_output();
-
-    this->set_is_file_output(false);
 
     this->push_scope(sc);
     this->codegen(n, &out);
     this->pop_scope();
-
-    this->set_is_file_output(was_file_output);
 
     CURRENT_CONFIGURATION->line_markers = prev_line_markers;
 
