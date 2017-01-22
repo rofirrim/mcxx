@@ -321,6 +321,9 @@ namespace Codegen
         // Promotes an expression known to just yield a value to a temporary
         llvm::Value *make_temporary(llvm::Value *v);
 
+        // Allocate array
+        void allocate_array(const Nodecl::ArraySubscript &array_subscript);
+
         // Map symbols to llvm::Value*
         void clear_mappings()
         {

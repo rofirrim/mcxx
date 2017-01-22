@@ -3586,6 +3586,115 @@ void FortranLLVM::visit(const Nodecl::FortranPrintStatement& node)
     ir_builder->CreateCall(gfortran_rt.st_write_done.get(), { dt_parm });
 }
 
+void FortranLLVM::allocate_array(const Nodecl::ArraySubscript &array_subscript)
+{
+    TrackLocation loc(this, array_subscript);
+
+    Nodecl::NodeclBase array_name = array_subscript.get_subscripted();
+    if (array_name.is<Nodecl::Dereference>())
+        array_name = array_name.as<Nodecl::Dereference>().get_rhs();
+    ERROR_CONDITION(!array_name.is<Nodecl::Symbol>(), "Invalid node", 0);
+    TL::Symbol symbol = array_name.get_symbol();
+
+    Nodecl::List array_sizes_tree
+        = array_subscript.get_subscripts().as<Nodecl::List>();
+
+    // In the tree the sizes are stored as subscripts using C layout, so we
+    // have to reverse them here.
+    TL::ObjectList<Nodecl::NodeclBase> array_sizes(array_sizes_tree.rbegin(),
+                                                   array_sizes_tree.rend());
+
+    if (symbol.is_allocatable()) // ALLOCATABLE
+    {
+    }
+    else if (symbol.get_type().is_pointer()) // POINTER
+    {
+        internal_error("Not yet implemented", 0);
+    }
+    else
+    {
+        internal_error("Code unreachable", 0);
+    }
+
+    // Calculate first the size required to allocate the array storage
+    llvm::Value *value_size = nullptr;
+    for (TL::ObjectList<Nodecl::NodeclBase>::iterator size_it
+         = array_sizes.begin();
+         size_it != array_sizes.end();
+         size_it++)
+    {
+        llvm::Value *extent = nullptr;
+        if (size_it->is<Nodecl::Range>())
+        {
+            Nodecl::Range r = size_it->as<Nodecl::Range>();
+            ERROR_CONDITION(
+                !r.get_stride().is_null(), "No stride is allowed here", 0);
+            extent = ir_builder->CreateAdd(
+                ir_builder->CreateSub(
+                    ir_builder->CreateZExtOrTrunc(
+                        eval_expression(r.get_upper()), llvm_types.i64),
+                    ir_builder->CreateZExtOrTrunc(
+                        eval_expression(r.get_lower()), llvm_types.i64)),
+                get_integer_value_64(1));
+        }
+        else
+        {
+            extent = ir_builder->CreateZExtOrTrunc(eval_expression(*size_it),
+                                                   llvm_types.i64);
+        }
+        if (value_size == nullptr)
+            value_size = extent;
+        else
+            value_size = ir_builder->CreateMul(value_size, extent);
+    }
+
+    // FIXME - Check whether the size overflows: gfortran does this
+
+    // Check if the object has already been allocated. This simply checks if
+    // base_addr is null
+    llvm::Value *descriptor_addr = get_value(symbol);
+    llvm::Value *field_addr_base_address
+        = gep_for_field(descriptor_addr->getType()->getPointerElementType(),
+                        descriptor_addr,
+                        { "base_addr" });
+    llvm::Value *val_base_address
+        = ir_builder->CreateLoad(field_addr_base_address);
+
+    llvm::BasicBlock *already_allocated = llvm::BasicBlock::Create(
+        llvm_context, "allocate.already_allocated", get_current_function());
+    llvm::BasicBlock *not_allocated = llvm::BasicBlock::Create(
+        llvm_context, "allocate.not_allocated", get_current_function());
+
+    ir_builder->CreateCondBr(
+        ir_builder->CreateICmpNE(
+            ir_builder->CreatePtrToInt(val_base_address, llvm_types.i64),
+            get_integer_value_64(0)),
+        already_allocated,
+        not_allocated);
+
+    set_current_block(already_allocated);
+    {
+        std::stringstream ss;
+        ss << "Array '" << symbol.get_name() << "' already allocated";
+        gfortran_runtime_error(array_subscript.get_locus(), ss.str());
+    }
+    ir_builder->CreateBr(not_allocated); // This is to appease IR checker
+
+    set_current_block(not_allocated);
+    // Now allocate memory. Simply call malloc for this
+
+    llvm::Value *malloc_call
+        = ir_builder->CreateCall(gfortran_rt.malloc.get(), { value_size });
+
+    // FIXME - malloc can return NULL, this should be checked
+    ir_builder->CreateStore(malloc_call, field_addr_base_address);
+
+    fill_descriptor_info(symbol.get_type(),
+                         /* descriptor addr  */ descriptor_addr,
+                         /* base_address */ malloc_call,
+                         array_sizes);
+}
+
 void FortranLLVM::visit(const Nodecl::FortranAllocateStatement& node)
 {
     // FIXME - We have to honour the options
@@ -3595,7 +3704,6 @@ void FortranLLVM::visit(const Nodecl::FortranAllocateStatement& node)
          alloc_it != items.end();
          alloc_it++)
     {
-        TrackLocation loc(this, *alloc_it);
         // The representation of this node (ab)uses expressions to represent
         // the allocation items, fortunately for us the subscripted item should
         // already be an ALLOCATABLE or POINTER array. Note that for the case
@@ -3604,117 +3712,16 @@ void FortranLLVM::visit(const Nodecl::FortranAllocateStatement& node)
         //
         // I think that upstream has a ticket about this representation being
         // unwieldy.
-        ERROR_CONDITION(
-            !alloc_it->is<Nodecl::ArraySubscript>(), "Invalid node", 0);
-        Nodecl::ArraySubscript array_subscript
-            = alloc_it->as<Nodecl::ArraySubscript>();
-
-        Nodecl::NodeclBase array_name = array_subscript.get_subscripted();
-        if (array_name.is<Nodecl::Dereference>())
-            array_name = array_name.as<Nodecl::Dereference>().get_rhs();
-        ERROR_CONDITION(!array_name.is<Nodecl::Symbol>(), "Invalid node", 0);
-        TL::Symbol symbol = array_name.get_symbol();
-
-        Nodecl::List array_sizes_tree
-            = array_subscript.get_subscripts().as<Nodecl::List>();
-
-        // In the tree the sizes are stored as subscripts using C layout, so we
-        // have to reverse them here.
-        TL::ObjectList<Nodecl::NodeclBase> array_sizes(
-            array_sizes_tree.rbegin(), array_sizes_tree.rend());
-
-        if (symbol.is_allocatable()) // ALLOCATABLE
+        if (alloc_it->is<Nodecl::ArraySubscript>())
         {
-        }
-        else if (symbol.get_type().is_pointer()) // POINTER
-        {
-            internal_error("Not yet implemented", 0);
+            Nodecl::ArraySubscript array_subscript
+                = alloc_it->as<Nodecl::ArraySubscript>();
+            allocate_array(array_subscript);
         }
         else
         {
-            internal_error("Code unreachable", 0);
+            internal_error("Scalar allocate not implemented yet", 0);
         }
-
-        // Calculate first the size required to allocate the array storage
-        llvm::Value *value_size = nullptr;
-        for (TL::ObjectList<Nodecl::NodeclBase>::iterator size_it
-             = array_sizes.begin();
-             size_it != array_sizes.end();
-             size_it++)
-        {
-            llvm::Value *extent = nullptr;
-            if (size_it->is<Nodecl::Range>())
-            {
-                Nodecl::Range r = size_it->as<Nodecl::Range>();
-                ERROR_CONDITION(
-                    !r.get_stride().is_null(), "No stride is allowed here", 0);
-                extent = ir_builder->CreateAdd(
-                    ir_builder->CreateSub(
-                        ir_builder->CreateZExtOrTrunc(
-                            eval_expression(r.get_upper()), llvm_types.i64),
-                        ir_builder->CreateZExtOrTrunc(
-                            eval_expression(r.get_lower()), llvm_types.i64)),
-                    get_integer_value_64(1));
-            }
-            else
-            {
-                extent = ir_builder->CreateZExtOrTrunc(
-                    eval_expression(*size_it), llvm_types.i64);
-            }
-            if (value_size == nullptr)
-                value_size = extent;
-            else
-                value_size = ir_builder->CreateMul(value_size, extent);
-        }
-
-        // FIXME - Check whether the size overflows: gfortran does this
-
-        // Check if the object has already been allocated. This simply checks if base_addr is null
-        llvm::Value *descriptor_addr = get_value(symbol);
-        llvm::Value *field_addr_base_address
-            = gep_for_field(descriptor_addr->getType()->getPointerElementType(),
-                            descriptor_addr,
-                            { "base_addr" });
-        llvm::Value *val_base_address
-            = ir_builder->CreateLoad(field_addr_base_address);
-
-        llvm::BasicBlock *already_allocated = llvm::BasicBlock::Create(
-            llvm_context, "allocate.already_allocated", get_current_function());
-        llvm::BasicBlock *not_allocated = llvm::BasicBlock::Create(
-            llvm_context, "allocate.not_allocated", get_current_function());
-
-        ir_builder->CreateCondBr(
-            ir_builder->CreateICmpNE(
-                ir_builder->CreatePtrToInt(val_base_address, llvm_types.i64),
-                get_integer_value_64(0)),
-            already_allocated,
-            not_allocated);
-
-        set_current_block(already_allocated);
-        {
-            std::stringstream ss;
-            ss << "Array '" << symbol.get_name() << "' already allocated";
-            gfortran_runtime_error(alloc_it->get_locus(), ss.str());
-        }
-        ir_builder->CreateBr(not_allocated); // This is to appease IR checker
-
-        set_current_block(not_allocated);
-        // Now allocate memory. Simply call malloc for this
-
-        llvm::Value *malloc_call = ir_builder->CreateCall(
-                gfortran_rt.malloc.get(),
-                { value_size });
-
-        // FIXME - malloc can return NULL, this should be checked
-        ir_builder->CreateStore(
-                malloc_call,
-                field_addr_base_address);
-
-        fill_descriptor_info(
-                symbol.get_type(),
-                /* descriptor addr  */ descriptor_addr,
-                /* base_address */ malloc_call, 
-                array_sizes);
     }
 }
 
