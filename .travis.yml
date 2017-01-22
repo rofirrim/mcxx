@@ -14,4 +14,4 @@ script:
     make -j$(nproc) &&
     make install &&
     make check"
-    - "grep -C20 failed tests/test.log || true"
+    - "grep -C20 'failed!' tests/test.log || true"
