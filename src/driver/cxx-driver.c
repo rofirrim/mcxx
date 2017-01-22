@@ -440,7 +440,7 @@ typedef enum
 
 
 // It mimics getopt
-#define SHORT_OPTIONS_STRING "vVkKcho:EyI:J:L:l:gD:U:x:"
+#define SHORT_OPTIONS_STRING "vVkKcho:EyI:J:L:l:gD:U:x:S"
 // This one mimics getopt_long but with one less field (the third one is not given)
 struct command_line_long_options command_line_long_options[] =
 {
@@ -868,6 +868,7 @@ int parse_arguments(int argc, const char* argv[],
     // Flags -E/-y and -c are incompatible
     static char c_specified = 0;
     static char E_specified = 0;
+    static char S_specified = 0;
     static char y_specified = 0;
     static char v_specified = 0;
 
@@ -1104,6 +1105,14 @@ int parse_arguments(int argc, const char* argv[],
 
                         c_specified = 1;
 
+                        CURRENT_CONFIGURATION->do_not_link = 1;
+                        break;
+                    }
+                case 'S' :
+                    {
+                        S_specified = 1;
+
+                        CURRENT_CONFIGURATION->generate_assembler = 1;
                         CURRENT_CONFIGURATION->do_not_link = 1;
                         break;
                     }
@@ -1720,14 +1729,15 @@ int parse_arguments(int argc, const char* argv[],
     if (output_file != NULL
             && (strcmp(output_file, "-") == 0)
             && !E_specified
+            && !S_specified
             && !y_specified
             && !CURRENT_CONFIGURATION->do_not_process_files)
     {
-        fprintf(stderr, "%s: specifying stdout by means of '-o -' is only valid with -y or -E\n", compilation_process.exec_basename);
+        fprintf(stderr, "%s: specifying stdout by means of '-o -' is only valid with -y, -E or -S\n", compilation_process.exec_basename);
         return 1;
     }
 
-    // If -E has been specified and no output file has been, assume it is "-"
+    // If -E/-y has been specified and no output file has been, assume it is "-"
     if (output_file == NULL
             && (E_specified || y_specified)
             && !CURRENT_CONFIGURATION->do_not_process_files)
@@ -2057,20 +2067,6 @@ static int parse_special_parameters(int *should_advance, int parameter_index,
                 else
                 {
                     failure = 1;
-                }
-                break;
-            }
-        case 'S' :
-            {
-                if (strlen(argument) == 2) // -S
-                {
-                    // This disables linking
-                    if (!dry_run)
-                    {
-                        CURRENT_CONFIGURATION->generate_assembler = 1;
-                        CURRENT_CONFIGURATION->do_not_link = 1;
-                    }
-                    (*should_advance)++;
                 }
                 break;
             }
