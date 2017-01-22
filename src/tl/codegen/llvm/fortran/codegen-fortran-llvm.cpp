@@ -3683,8 +3683,13 @@ void FortranLLVM::allocate_array(const Nodecl::ArraySubscript &array_subscript)
     set_current_block(not_allocated);
     // Now allocate memory. Simply call malloc for this
 
+    TL::Type base_elem
+        = symbol.get_type().no_ref().fortran_array_base_element();
+    llvm::Value *bytes_size
+        = ir_builder->CreateMul(value_size, eval_sizeof_64(base_elem));
+
     llvm::Value *malloc_call
-        = ir_builder->CreateCall(gfortran_rt.malloc.get(), { value_size });
+        = ir_builder->CreateCall(gfortran_rt.malloc.get(), { bytes_size });
 
     // FIXME - malloc can return NULL, this should be checked
     ir_builder->CreateStore(malloc_call, field_addr_base_address);
