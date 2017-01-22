@@ -1,5 +1,7 @@
 # Mercurium C/C++/Fortran source-to-source compiler
 
+[![Build Status](https://travis-ci.org/rofirrim/mcxx.svg?branch=master)](https://travis-ci.org/rofirrim/mcxx)
+
 Mercurium is a C/C++/Fortran source-to-source compilation infrastructure aimed at fast
 prototyping developed by the [*Programming Models group*](https://pm.bsc.es/)
 at the [**Barcelona Supercomputing Center**](http://www.bsc.es/).
