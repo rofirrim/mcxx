@@ -10,7 +10,7 @@ before_install:
     - sudo apt-get install -qq -y flex bison gperf gfortran libsqlite3-dev
 script:
     "autoreconf -fiv &&
-    ./configure --prefix=$HOME/mcxx-install &&
+    ./configure CFLAGS=\"-O0\" CXXFLAGS=\"-O0\" --prefix=$HOME/mcxx-install &&
     make &&
     make install &&
     make check"
