@@ -9,4 +9,8 @@ before_install:
     - sudo apt-get update -qq
     - sudo apt-get install -qq -y flex bison gperf gfortran libsqlite3-dev
 script:
-    ./configure --prefix=$HOME/mcxx-install && make && make install && make check
+    "autoreconf -fiv &&
+    ./configure --prefix=$HOME/mcxx-install &&
+    make &&
+    make install &&
+    make check"
