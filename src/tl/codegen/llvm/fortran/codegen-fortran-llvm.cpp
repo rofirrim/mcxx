@@ -814,80 +814,306 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             base->getType());
     }
 
-    void array_assignment_in_place(const Nodecl::NodeclBase &lhs,
-                                  const Nodecl::NodeclBase &rhs,
-                                  TL::Type lhs_type,
-                                  TL::Type rhs_type,
-                                  llvm::Value *lhs_addr,
-                                  llvm::Value *rhs_addr)
+    struct LoopInfoOp
     {
-        // FIXME - Use the easiest of the two to compute
-        llvm::Value *dim_idx = llvm_visitor->ir_builder->CreateAlloca(llvm_visitor->llvm_types.i64, nullptr, "array_op_idx.addr");
-        llvm::Value *dim_size = llvm_visitor->eval_elements_of_dimension(lhs_type);
+        std::vector<llvm::Value *> idx_var;
+        std::vector<llvm::BasicBlock *> block_check;
+        std::vector<llvm::BasicBlock *> block_body;
+        std::vector<llvm::BasicBlock *> block_end;
+    };
 
-        create_array_op_loop(
-            dim_idx,
-            dim_size,
-            [&, this]()
+    void create_loop_header_for_array_op(TL::Type t,
+            /* out */
+            LoopInfoOp &loop_info_op
+            )
+    {
+        t = t.no_ref();
+        if (t.is_pointer())
+            t = t.points_to();
+        ERROR_CONDITION(!t.is_fortran_array(), "Invalid type!\n", 0);
+        int rank = t.fortran_rank();
+
+        for (int i = 0; i < rank; i++)
+        {
+            llvm::BasicBlock *block_check
+                = llvm::BasicBlock::Create(llvm_visitor->llvm_context,
+                        "array_op.check",
+                        llvm_visitor->get_current_function());
+            loop_info_op.block_check.push_back(block_check);
+
+            llvm::BasicBlock *block_body
+                = llvm::BasicBlock::Create(llvm_visitor->llvm_context,
+                        "array_op.body",
+                        llvm_visitor->get_current_function());
+            loop_info_op.block_body.push_back(block_body);
+
+            llvm::BasicBlock *block_end
+                = llvm::BasicBlock::Create(llvm_visitor->llvm_context,
+                        "array_op.end",
+                        llvm_visitor->get_current_function());
+            loop_info_op.block_end.push_back(block_end);
+
+            llvm::Value *idx_var = llvm_visitor->ir_builder->CreateAlloca(llvm_visitor->llvm_types.i64);
+            loop_info_op.idx_var.push_back(idx_var);
+
+            llvm_visitor->ir_builder->CreateStore(llvm_visitor->get_integer_value_64(0), idx_var);
+
+            llvm_visitor->ir_builder->CreateBr(block_check);
+            llvm_visitor->set_current_block(block_check);
+
+            llvm::Value *loop_upper;
+            if (t.array_is_region())
             {
-                llvm::Value *dim_idx_value = llvm_visitor->ir_builder->CreateLoad(dim_idx, "array_op_idx.val");
-
-                // The rank of both arrays is the same, so checking either should do
-                if (!lhs_type.array_element().is_fortran_array())
+                Nodecl::NodeclBase lower, upper, stride;
+                t.array_get_region_bounds(lower, upper, stride);
+                if (stride.is_constant()
+                    && const_value_is_one(stride.get_constant()))
                 {
-                    // We are now at the elemental level
-
-                    TL::Type lhs_element_type = lhs_type.array_base_element();
-                    TL::Type rhs_element_type = rhs_type.array_base_element();
-
-                    llvm::Value *lhs_elem_offset
-                        = compute_offset_from_linear_element(
-                            lhs_type, dim_idx_value);
-                    llvm::Value *lhs_elem_addr
-                        = add_offset_to_address(lhs_addr, lhs_elem_offset);
-
-                    llvm::Value *rhs_elem_val;
-                    if (is_scalar_to_array(rhs))
-                    {
-                        rhs_elem_val = rhs_addr;
-                    }
-                    else
-                    {
-                        llvm::Value *rhs_elem_offset
-                            = compute_offset_from_linear_element(
-                                rhs_type, dim_idx_value);
-                        llvm::Value *rhs_elem_addr = add_offset_to_address(rhs_addr, rhs_elem_offset);
-                        rhs_elem_val = llvm_visitor->ir_builder->CreateLoad(
-                            rhs_elem_addr);
-                    }
-
-                    // Store
-                    llvm_visitor->ir_builder->CreateStore(rhs_elem_val,
-                                                          lhs_elem_addr);
+                    loop_upper = llvm_visitor->ir_builder->CreateAdd(
+                        llvm_visitor->ir_builder->CreateSub(
+                            llvm_visitor->eval_expression(upper),
+                            llvm_visitor->eval_expression(lower)),
+                        llvm_visitor->get_integer_value_64(1));
                 }
                 else
                 {
-                    llvm::Value *lhs_offset
-                        = compute_offset_from_linear_element(lhs_type,
-                                                             dim_idx_value);
-                    lhs_addr = add_offset_to_address(lhs_addr, lhs_offset);
-
-                    // Another dimension. Update offsets if necessary
-                    if (!is_scalar_to_array(rhs))
-                    {
-                        llvm::Value *rhs_offset = compute_offset_from_linear_element(
-                            rhs_type, dim_idx_value);
-                        rhs_addr = add_offset_to_address(rhs_addr, rhs_offset);
-                    }
-
-                    array_assignment_in_place(lhs,
-                                              rhs,
-                                              lhs_type.array_element(),
-                                              rhs_type.array_element(),
-                                              lhs_addr,
-                                              rhs_addr);
+                    llvm::Value *vstride = llvm_visitor->eval_expression(stride);
+                    loop_upper = llvm_visitor->ir_builder->CreateSDiv(
+                        llvm_visitor->ir_builder->CreateAdd(
+                            llvm_visitor->ir_builder->CreateSub(
+                                llvm_visitor->eval_expression(upper),
+                                llvm_visitor->eval_expression(lower)),
+                            vstride),
+                        vstride);
                 }
-            });
+            }
+            else
+            {
+                Nodecl::NodeclBase lower, upper;
+                t.array_get_bounds(lower, upper);
+
+                loop_upper = llvm_visitor->ir_builder->CreateAdd(
+                    llvm_visitor->ir_builder->CreateSub(
+                        llvm_visitor->eval_expression(upper),
+                        llvm_visitor->eval_expression(lower)),
+                    llvm_visitor->get_integer_value_64(1));
+            }
+
+            llvm::Value *vcheck = llvm_visitor->ir_builder->CreateICmpSLT(
+                llvm_visitor->ir_builder->CreateLoad(idx_var), loop_upper);
+            llvm_visitor->ir_builder->CreateCondBr(
+                vcheck, block_body, block_end);
+
+            llvm_visitor->set_current_block(block_body);
+
+            t = t.array_element();
+        }
+    }
+
+    void create_loop_footer_for_array_op(TL::Type t,
+            const LoopInfoOp &loop_info_op
+            )
+    {
+        t = t.no_ref();
+        if (t.is_pointer())
+            t = t.points_to();
+        ERROR_CONDITION(!t.is_fortran_array(), "Invalid type!\n", 0);
+        int rank = t.fortran_rank();
+
+        // Sanity check
+        ERROR_CONDITION((int)loop_info_op.idx_var.size() != rank
+                            || (int)loop_info_op.block_check.size() != rank
+                            || (int)loop_info_op.block_body.size() != rank
+                            || (int)loop_info_op.block_end.size() != rank,
+                        "Inconsistency between rank and loop info",
+                        0);
+
+
+        for (int i = rank - 1; i >= 0; i--)
+        {
+            llvm::Value *idx_var = loop_info_op.idx_var[i];
+            llvm_visitor->ir_builder->CreateStore(
+                llvm_visitor->ir_builder->CreateAdd(
+                    llvm_visitor->ir_builder->CreateLoad(idx_var),
+                    llvm_visitor->get_integer_value_64(1)),
+                idx_var);
+
+            llvm::BasicBlock *block_check = loop_info_op.block_check[i];
+            llvm_visitor->ir_builder->CreateBr(block_check);
+
+            llvm::BasicBlock *block_end = loop_info_op.block_end[i];
+            llvm_visitor->set_current_block(block_end);
+        }
+    }
+
+    llvm::Value *address_array_ith_element_via_descriptor(
+        TL::Type t,
+        llvm::Value *address,
+        const std::vector<llvm::Value *> indexes)
+    {
+        internal_error("Not yet implemented", 0);
+    }
+
+    llvm::Value *address_array_ith_element_via_pointer_arithmetic(
+        TL::Type t,
+        llvm::Value *address,
+        const std::vector<llvm::Value *> indexes)
+    {
+        if (t.array_is_vla())
+        {
+            // Here we have to use Horner
+            internal_error("Not yet implemented", 0);
+        }
+        else
+        {
+            // Here we can use a GEP
+            int rank = t.fortran_rank();
+            TL::Type array_type = t;
+
+            std::vector<llvm::Value *> indexes_gep;
+            indexes_gep.push_back(llvm_visitor->get_integer_value_64(0));
+
+            for (int i = 0; i < rank; i++)
+            {
+                if (t.array_is_region())
+                {
+                    Nodecl::NodeclBase dim_lower, dim_upper;
+                    t.array_get_bounds(dim_lower, dim_upper);
+
+                    Nodecl::NodeclBase region_lower, region_upper,
+                        region_stride;
+                    t.array_get_region_bounds(
+                        region_lower, region_upper, region_stride);
+
+                    llvm::Value *position = llvm_visitor->ir_builder->CreateSub(
+                        llvm_visitor->ir_builder->CreateAdd(
+                            indexes[i],
+                            llvm_visitor->eval_expression(region_lower)),
+                        llvm_visitor->eval_expression(dim_lower));
+
+                    indexes_gep.push_back(position);
+                }
+                else
+                {
+                    // This access is not on a region so the ith element
+                    // corresponds to the exact 0-based index.
+                    indexes_gep.push_back(indexes[i]);
+                }
+                t = t.array_element();
+            }
+
+            return llvm_visitor->ir_builder->CreateGEP(address, indexes_gep);
+        }
+    }
+
+    llvm::Value *address_array_ith_element(TL::Type t,
+            llvm::Value *address,
+            const std::vector<llvm::Value *> indexes)
+    {
+        t = t.no_ref();
+        if (t.is_pointer())
+            t = t.points_to();
+        ERROR_CONDITION(!t.is_fortran_array(), "Invalid type!\n", 0);
+        // Sanity check
+        int rank = t.fortran_rank();
+        ERROR_CONDITION(rank != (int)indexes.size(),
+                        "Mismatch between indexes and rank!\n",
+                        0);
+
+        if (t.array_requires_descriptor())
+            return address_array_ith_element_via_descriptor(t, address, indexes);
+        else
+            return address_array_ith_element_via_pointer_arithmetic(t, address, indexes);
+    }
+
+
+    template <typename Creator>
+    void array_assignment(const Nodecl::NodeclBase &lhs,
+                          const Nodecl::NodeclBase &rhs,
+                          TL::Type lhs_type,
+                          TL::Type rhs_type,
+                          llvm::Value *lhs_addr,
+                          llvm::Value *rhs_addr,
+                          Creator create_store)
+    {
+        LoopInfoOp loop_info_op;
+        create_loop_header_for_array_op(rhs_type, loop_info_op);
+
+        // Loop body
+        llvm::Value *lhs_addr_element = address_array_ith_element(lhs_type, lhs_addr, loop_info_op.idx_var);
+        llvm::Value *rhs_addr_element = address_array_ith_element(rhs_type, rhs_addr, loop_info_op.idx_var);
+        create_store(llvm_visitor->ir_builder->CreateLoad(rhs_addr_element),
+                     lhs_addr_element);
+        create_loop_footer_for_array_op(rhs_type, loop_info_op);
+    }
+
+    typedef std::function<void (llvm::Value *addr, llvm::Value *value)> AssigOp;
+    AssigOp get_assig_op(TL::Type lhs_type, TL::Type rhs_type)
+    {
+        if (lhs_type.no_ref().is_fortran_character()
+            && rhs_type.no_ref().is_fortran_character())
+        {
+            return [&, lhs_type, rhs_type, this](llvm::Value * rhs,
+                                                      llvm::Value * lhs)
+            {
+                // A CHARACTER assignment
+                // Fortran is a bit special in that its strings are padded with
+                // blanks so we will copy the characters from rhs and then fill
+                // whatever remains with blanks
+
+                // FIXME - What about substrings?
+
+                // Compute the minimum length of characters to transfer from rhs
+                // to lhs
+                llvm::Value *size_lhs
+                    = llvm_visitor->eval_length_of_character(lhs_type.no_ref());
+                llvm::Value *size_rhs
+                    = llvm_visitor->eval_length_of_character(rhs_type);
+
+                llvm::Value *min_size = llvm_visitor->ir_builder->CreateSelect(
+                    llvm_visitor->ir_builder->CreateICmpSLT(size_lhs, size_rhs),
+                    size_lhs,
+                    size_rhs);
+
+                // FIXME: CHARACTER(LEN=*) :: C should be handled like a VLA
+                llvm::Value *lhs_addr = llvm_visitor->ir_builder->CreateGEP(
+                    lhs,
+                    { llvm_visitor->get_integer_value_32(0),
+                      llvm_visitor->get_integer_value_64(0) });
+                llvm::Value *rhs_addr = rhs;
+
+                llvm_visitor->ir_builder->CreateMemCpy(
+                    lhs_addr, rhs_addr, min_size, 1);
+
+                llvm::Value *diff
+                    = llvm_visitor->ir_builder->CreateSub(size_lhs, size_rhs);
+                diff = llvm_visitor->ir_builder->CreateSelect(
+                    llvm_visitor->ir_builder->CreateICmpSLT(
+                        diff, llvm_visitor->get_integer_value_64(0)),
+                    llvm_visitor->get_integer_value_64(0),
+                    diff);
+
+                llvm::Value *lhs_offset = llvm_visitor->ir_builder->CreateGEP(
+                    lhs, { llvm_visitor->get_integer_value_64(0), min_size });
+
+                llvm::Value *pad_len
+                    = llvm_visitor->ir_builder->CreateSub(size_lhs, min_size);
+
+                llvm_visitor->ir_builder->CreateMemSet(
+                    lhs_offset,
+                    llvm_visitor->get_integer_value_N(
+                        ' ', llvm_visitor->llvm_types.i8, 8),
+                    pad_len,
+                    1);
+            };
+        }
+        else
+        {
+            // A simple scalar assignment
+            return [&, this](llvm::Value *rhs, llvm::Value *lhs) {
+                llvm_visitor->ir_builder->CreateStore(rhs, lhs);
+            };
+        }
     }
 
     void visit(const Nodecl::Assignment& node)
@@ -903,8 +1129,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         if (lhs_type.no_ref().is_fortran_array() && rhs_type.is_fortran_array())
         {
             lhs_type = lhs_type.no_ref();
-            if (!lhs_type.array_is_vla()
-                && !lhs_type.array_is_region()
+            if (!lhs_type.array_is_vla() && !lhs_type.array_is_region()
                 && !lhs_type.array_requires_descriptor()
                 && !rhs_type.array_is_vla()
                 && !rhs_type.array_is_region()
@@ -912,87 +1137,33 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             {
                 // If both are statically sized arrays we use LLVM IR
                 // feature of array-wise operations
-                value = llvm_visitor->ir_builder->CreateStore(vrhs, vlhs);
+                // FIXME: This looks a bit off
+                llvm_visitor->ir_builder->CreateStore(vrhs, vlhs);
             }
             else
             {
-                // FIXME - If either side is an array section we must use array_assignment_via_temp
-                array_assignment_in_place(node.get_lhs(),
-                        node.get_rhs(),
-                        lhs_type,
-                        rhs_type,
-                        vlhs,
-                        vrhs);
-
-                value = vlhs;
+                array_assignment(node.get_lhs(),
+                                 node.get_rhs(),
+                                 lhs_type,
+                                 rhs_type,
+                                 vlhs,
+                                 vrhs,
+                                 get_assig_op(lhs_type, rhs_type));
             }
         }
         else if (!lhs_type.no_ref().is_fortran_array()
-                    && !rhs_type.is_fortran_array())
+                 && !rhs_type.is_fortran_array())
         {
-            // A scalar assignment
-            if (!lhs_type.no_ref().is_fortran_character()
-                    && !rhs_type.no_ref().is_fortran_character())
-            {
-                // A very simple scalar assignment
-                value = llvm_visitor->ir_builder->CreateStore(vrhs, vlhs);
-            }
-            else if (lhs_type.no_ref().is_fortran_character()
-                    && rhs_type.no_ref().is_fortran_character())
-            {
-                // A CHARACTER assignment
-                // Fortran is a bit special in that its strings are padded with blanks
-                // so we will copy the characters from rhs and then fill whatever remains
-                // with blanks
-
-                // FIXME - What about substrings?
-
-                // Compute the minimum length of characters to transfer from rhs to lhs
-                llvm::Value *size_lhs = llvm_visitor->eval_length_of_character(lhs_type.no_ref());
-                llvm::Value *size_rhs = llvm_visitor->eval_length_of_character(rhs_type);
-
-                llvm::Value *min_size = llvm_visitor->ir_builder->CreateSelect(
-                        llvm_visitor->ir_builder->CreateICmpSLT(size_lhs, size_rhs),
-                        size_lhs, size_rhs);
-
-                // FIXME: CHARACTER(LEN=*) :: C should be handled like a VLA
-                llvm::Value *lhs_addr = llvm_visitor->ir_builder->CreateGEP(
-                        vlhs, { llvm_visitor->get_integer_value_32(0), llvm_visitor->get_integer_value_64(0) });
-                llvm::Value *rhs_addr = vrhs;
-
-                llvm_visitor->ir_builder->CreateMemCpy(
-                        lhs_addr,
-                        rhs_addr,
-                        min_size,
-                        1);
-
-                llvm::Value *diff = llvm_visitor->ir_builder->CreateSub(size_lhs, size_rhs);
-                diff = llvm_visitor->ir_builder->CreateSelect(
-                        llvm_visitor->ir_builder->CreateICmpSLT(diff, llvm_visitor->get_integer_value_64(0)),
-                        llvm_visitor->get_integer_value_64(0), diff);
-
-                llvm::Value *lhs_offset = llvm_visitor->ir_builder->CreateGEP(
-                        vlhs, { llvm_visitor->get_integer_value_64(0), min_size });
-
-                llvm::Value *pad_len = llvm_visitor->ir_builder->CreateSub(size_lhs, min_size);
-
-                llvm_visitor->ir_builder->CreateMemSet(
-                        lhs_offset,
-                        llvm_visitor->get_integer_value_N(' ', llvm_visitor->llvm_types.i8, 8),
-                        pad_len,
-                        1);
-
-                value = vlhs;
-            }
-            else
-                internal_error("Code unreachable", 0);
+            auto create_store = get_assig_op(lhs_type, rhs_type);
+            create_store(vrhs, vlhs);
         }
         else
         {
             internal_error("Unexpected assignment with lhs=%s and rhs=%s\n",
-                    print_declarator(lhs_type.get_internal_type()),
-                    print_declarator(rhs_type.get_internal_type()));
+                           print_declarator(lhs_type.get_internal_type()),
+                           print_declarator(rhs_type.get_internal_type()));
         }
+        value = vlhs;
     }
 
 
@@ -1273,176 +1444,6 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         }
     }
 
-    template <typename EmitLoopBody>
-    void create_array_op_loop(llvm::Value* idx_var, llvm::Value* upper, EmitLoopBody emit_loop_body)
-    {
-        llvm::BasicBlock *block_check
-            = llvm::BasicBlock::Create(llvm_visitor->llvm_context,
-                                       "array_op.check",
-                                       llvm_visitor->get_current_function());
-        llvm::BasicBlock *block_body
-            = llvm::BasicBlock::Create(llvm_visitor->llvm_context,
-                                       "array_op.body",
-                                       llvm_visitor->get_current_function());
-        llvm::BasicBlock *block_end
-            = llvm::BasicBlock::Create(llvm_visitor->llvm_context,
-                                       "array_op.end",
-                                       llvm_visitor->get_current_function());
-
-        llvm_visitor->ir_builder->CreateStore(llvm_visitor->get_integer_value_64(0), idx_var);
-
-        llvm_visitor->ir_builder->CreateBr(block_check);
-        llvm_visitor->set_current_block(block_check);
-
-        llvm::Value *vcheck = llvm_visitor->ir_builder->CreateICmpSLT(
-            llvm_visitor->ir_builder->CreateLoad(idx_var),
-            upper);
-        llvm_visitor->ir_builder->CreateCondBr(vcheck, block_body, block_end);
-
-        llvm_visitor->set_current_block(block_body);
-
-        emit_loop_body();
-
-        llvm_visitor->ir_builder->CreateStore(
-            llvm_visitor->ir_builder->CreateAdd(
-                llvm_visitor->ir_builder->CreateLoad(idx_var),
-                llvm_visitor->get_integer_value_64(1)),
-            idx_var);
-        llvm_visitor->ir_builder->CreateBr(block_check);
-
-        llvm_visitor->set_current_block(block_end);
-    }
-
-    template <typename Create>
-    void arithmetic_binary_operator_array_loop(const Nodecl::NodeclBase &lhs,
-                                               const Nodecl::NodeclBase &rhs,
-                                               TL::Type lhs_type,
-                                               TL::Type rhs_type,
-                                               llvm::Value *lhs_addr,
-                                               llvm::Value *rhs_addr,
-                                               llvm::Value *result_addr,
-                                               llvm::Value *result_idx_addr,
-                                               Create create)
-    {
-        // Here basically we loop elements of each dimension. Since the loop has been
-        // linearized 
-
-        // FIXME - Use the easiest of the two to compute
-        llvm::Value *dim_idx = llvm_visitor->ir_builder->CreateAlloca(llvm_visitor->llvm_types.i64);
-        llvm::Value *dim_size = llvm_visitor->eval_elements_of_dimension(lhs_type);
-
-        create_array_op_loop(
-            dim_idx,
-            dim_size,
-            [&, this]()
-            {
-                llvm::Value *dim_idx_value = llvm_visitor->ir_builder->CreateLoad(dim_idx);
-
-                // The rank of both arrays is the same, so checking either should do
-                if (!lhs_type.array_element().is_fortran_array())
-                {
-                    // We are now at the elemental level
-
-                    TL::Type lhs_element_type = lhs_type.array_base_element();
-                    TL::Type rhs_element_type = rhs_type.array_base_element();
-
-                    llvm::Value *lhs_elem_val;
-                    if (is_scalar_to_array(lhs))
-                    {
-                        lhs_elem_val = lhs_addr;
-                    }
-                    else
-                    {
-                        llvm::Value *lhs_elem_offset
-                            = compute_offset_from_linear_element(
-                                lhs_type, dim_idx_value);
-                        llvm::Value *lhs_elem_addr
-                            = add_offset_to_address(lhs_addr, lhs_elem_offset);
-                        lhs_elem_val = llvm_visitor->ir_builder->CreateLoad(
-                            lhs_elem_addr);
-                    }
-
-                    llvm::Value *rhs_elem_val;
-                    if (is_scalar_to_array(rhs))
-                    {
-                        rhs_elem_val = rhs_addr;
-                    }
-                    else
-                    {
-                        llvm::Value *rhs_elem_offset
-                            = compute_offset_from_linear_element(
-                                rhs_type, dim_idx_value);
-                        llvm::Value *rhs_elem_addr
-                            = add_offset_to_address(rhs_addr, rhs_elem_offset);
-                        rhs_elem_val = llvm_visitor->ir_builder->CreateLoad(
-                            rhs_elem_addr);
-                    }
-
-                    llvm::Value *result_value
-                        = arithmetic_binary_op_elemental_intrinsic(
-                            lhs,
-                            rhs,
-                            lhs_elem_val,
-                            rhs_elem_val,
-                            create);
-
-                    // Compute result address
-                    llvm::Value *result_idx_val
-                        = llvm_visitor->ir_builder->CreateLoad(result_idx_addr);
-                    llvm::Value *result_elem_addr
-                        = llvm_visitor->ir_builder->CreateMul(
-                            llvm_visitor->eval_sizeof_64(lhs_element_type),
-                            result_idx_val);
-
-                    result_elem_addr = llvm_visitor->ir_builder->CreateAdd(
-                        llvm_visitor->ir_builder->CreatePtrToInt(
-                            result_addr, llvm_visitor->llvm_types.i64),
-                        result_elem_addr);
-
-                    result_elem_addr = llvm_visitor->ir_builder->CreateIntToPtr(
-                        result_elem_addr, result_addr->getType());
-
-                    // Store result to result address
-                    llvm_visitor->ir_builder->CreateStore(result_value,
-                                                          result_elem_addr);
-                    // Increment result_idx
-                    llvm_visitor->ir_builder->CreateStore(
-                        llvm_visitor->ir_builder->CreateAdd(
-                            result_idx_val,
-                            llvm_visitor->get_integer_value_64(1)),
-                        result_idx_addr);
-                }
-                else
-                {
-                    // Another dimension. Update addresses if necessary
-                    if (!is_scalar_to_array(lhs))
-                    {
-                        llvm::Value *lhs_offset
-                            = compute_offset_from_linear_element(lhs_type,
-                                                                 dim_idx_value);
-                        lhs_addr = add_offset_to_address(lhs_addr, lhs_offset);
-                    }
-                    if (!is_scalar_to_array(rhs))
-                    {
-                        llvm::Value *rhs_offset
-                            = compute_offset_from_linear_element(rhs_type,
-                                                                 dim_idx_value);
-                        rhs_addr = add_offset_to_address(rhs_addr, rhs_offset);
-                    }
-
-                    arithmetic_binary_operator_array_loop(
-                        lhs,
-                        rhs,
-                        lhs_type.array_element(),
-                        rhs_type.array_element(),
-                        lhs_addr,
-                        rhs_addr,
-                        result_addr,
-                        result_idx_addr,
-                        create);
-                }
-            });
-    }
 
     template <typename Create>
     void arithmetic_binary_operator_array(const Nodecl::NodeclBase &lhs,
@@ -1463,6 +1464,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                         0);
 
         // TODO: Select easiest of the two to compute
+        // FIXME: What if sizes differ?
         llvm::Value *array_size
             = llvm_visitor->eval_elements_of_array(lhs_type);
 
@@ -1481,16 +1483,26 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         llvm_visitor->ir_builder->CreateStore(
             llvm_visitor->get_integer_value_64(0), result_idx_addr);
 
-        // Loop dimensions
-        arithmetic_binary_operator_array_loop(lhs,
-                                              rhs,
-                                              lhs_type,
-                                              rhs_type,
-                                              lhs_addr,
-                                              rhs_addr,
-                                              result_addr,
-                                              result_idx_addr,
-                                              create);
+        LoopInfoOp loop_info_op;
+        create_loop_header_for_array_op(rhs_type, loop_info_op);
+        llvm::Value *lhs_addr_element = address_array_ith_element(lhs_type, lhs_addr, loop_info_op.idx_var);
+        llvm::Value *rhs_addr_element = address_array_ith_element(rhs_type, rhs_addr, loop_info_op.idx_var);
+        llvm::Value *val_op
+            = create(lhs,
+                     rhs,
+                     llvm_visitor->ir_builder->CreateLoad(lhs_addr_element),
+                     llvm_visitor->ir_builder->CreateLoad(rhs_addr_element));
+        llvm_visitor->ir_builder->CreateStore(
+            val_op,
+            llvm_visitor->ir_builder->CreateGEP(
+                result_addr,
+                { llvm_visitor->ir_builder->CreateLoad(result_idx_addr) }));
+        // FIXME - CHARACTER assignment!
+        llvm_visitor->ir_builder->CreateStore(
+            llvm_visitor->ir_builder->CreateAdd(llvm_visitor->ir_builder->CreateLoad(result_idx_addr),
+                                    llvm_visitor->get_integer_value_64(1)),
+            result_idx_addr);
+        create_loop_footer_for_array_op(rhs_type, loop_info_op);
 
         // The result array is an address in LLVM world.
         value = result_addr;
