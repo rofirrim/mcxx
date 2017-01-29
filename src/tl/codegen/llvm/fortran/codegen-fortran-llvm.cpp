@@ -948,7 +948,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
     llvm::Value *address_array_ith_element_via_descriptor(
         TL::Type t,
-        llvm::Value *address,
+        llvm::Value *base_address,
         const std::vector<llvm::Value *> indexes)
     {
         internal_error("Not yet implemented", 0);
@@ -956,58 +956,95 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
     llvm::Value *address_array_ith_element_via_pointer_arithmetic(
         TL::Type t,
-        llvm::Value *address,
+        llvm::Value *base_address,
         const std::vector<llvm::Value *> indexes)
     {
-        if (t.array_is_vla())
-        {
-            // Here we have to use Horner
-            internal_error("Not yet implemented", 0);
-        }
-        else
-        {
-            // Here we can use a GEP
-            int rank = t.fortran_rank();
-            TL::Type array_type = t;
+        int rank = t.fortran_rank();
 
-            std::vector<llvm::Value *> indexes_gep;
-            indexes_gep.push_back(llvm_visitor->get_integer_value_64(0));
+        // Horner
+        std::vector<llvm::Value *> offset_list, size_list;
+        offset_list.reserve(indexes.size());
+        size_list.reserve(indexes.size());
 
-            for (int i = 0; i < rank; i++)
+        for (int i = 0; i < rank; i++)
+        {
+            Nodecl::NodeclBase lower, upper;
+            t.array_get_bounds(lower, upper);
+            llvm::Value *val_lower = llvm_visitor->eval_expression(lower);
+            llvm::Value *val_upper = llvm_visitor->eval_expression(upper);
+
+            if (t.array_is_region())
             {
-                if (t.array_is_region())
-                {
-                    Nodecl::NodeclBase dim_lower, dim_upper;
-                    t.array_get_bounds(dim_lower, dim_upper);
+                Nodecl::NodeclBase region_lower, region_upper, region_stride;
+                t.array_get_region_bounds(
+                    region_lower, region_upper, region_stride);
 
-                    Nodecl::NodeclBase region_lower, region_upper,
-                        region_stride;
-                    t.array_get_region_bounds(
-                        region_lower, region_upper, region_stride);
+                llvm::Value *val_region_lower
+                    = llvm_visitor->eval_expression(region_lower);
 
-                    llvm::Value *position = llvm_visitor->ir_builder->CreateSub(
-                        llvm_visitor->ir_builder->CreateAdd(
-                            indexes[i],
-                            llvm_visitor->eval_expression(region_lower)),
-                        llvm_visitor->eval_expression(dim_lower));
+                llvm::Value *offset = llvm_visitor->ir_builder->CreateAdd(
+                    llvm_visitor->ir_builder->CreateSub(val_region_lower,
+                                                        val_lower),
+                    llvm_visitor->ir_builder->CreateMul(
+                        indexes[i],
+                        llvm_visitor->eval_expression(region_stride)));
 
-                    indexes_gep.push_back(position);
-                }
-                else
-                {
-                    // This access is not on a region so the ith element
-                    // corresponds to the exact 0-based index.
-                    indexes_gep.push_back(indexes[i]);
-                }
-                t = t.array_element();
+                offset_list.push_back(offset);
+            }
+            else
+            {
+                offset_list.push_back(indexes[i]);
             }
 
-            return llvm_visitor->ir_builder->CreateGEP(address, indexes_gep);
+            llvm::Value *val_size = llvm_visitor->ir_builder->CreateAdd(
+                llvm_visitor->ir_builder->CreateSub(val_upper, val_lower),
+                llvm_visitor->get_integer_value_64(1));
+            size_list.push_back(val_size);
+
+            t = t.array_element();
         }
+
+        std::vector<llvm::Value *>::iterator it_offsets = offset_list.begin();
+        std::vector<llvm::Value *>::iterator it_sizes = size_list.begin();
+
+        llvm::Value *val_addr = *it_offsets;
+        it_offsets++;
+        it_sizes++;
+
+        while (it_offsets != offset_list.end() && it_sizes != size_list.end())
+        {
+            val_addr = llvm_visitor->ir_builder->CreateAdd(
+                *it_offsets,
+                llvm_visitor->ir_builder->CreateMul(*it_sizes, val_addr));
+
+            it_offsets++;
+            it_sizes++;
+        }
+
+        ERROR_CONDITION(it_offsets != offset_list.end()
+                            || it_sizes != size_list.end(),
+                        "Lists do not match",
+                        0);
+
+        // Now multiply by the size of the type to get an offset in bytes
+        ERROR_CONDITION(t.is_fortran_array(),
+                        "Should not be an array here",
+                        0);
+        val_addr = llvm_visitor->ir_builder->CreateMul(
+            val_addr, llvm_visitor->eval_sizeof_64(t));
+
+        // And add this offset in bytes to the base
+        val_addr = llvm_visitor->ir_builder->CreateAdd(
+            llvm_visitor->ir_builder->CreatePtrToInt(
+                base_address, llvm_visitor->llvm_types.i64),
+            val_addr);
+
+        return llvm_visitor->ir_builder->CreateIntToPtr(
+            val_addr, base_address->getType());
     }
 
     llvm::Value *address_array_ith_element(TL::Type t,
-            llvm::Value *address,
+            llvm::Value *base_address,
             const std::vector<llvm::Value *> indexes)
     {
         t = t.no_ref();
@@ -1021,9 +1058,19 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                         0);
 
         if (t.array_requires_descriptor())
-            return address_array_ith_element_via_descriptor(t, address, indexes);
+            return address_array_ith_element_via_descriptor(t, base_address, indexes);
         else
-            return address_array_ith_element_via_pointer_arithmetic(t, address, indexes);
+            return address_array_ith_element_via_pointer_arithmetic(t, base_address, indexes);
+    }
+
+    std::vector<llvm::Value* > derref_indexes(const std::vector<llvm::Value* > v)
+    {
+        std::vector<llvm::Value*> ret(v.begin(), v.end());
+        for (auto &v : ret)
+        {
+            v = llvm_visitor->ir_builder->CreateLoad(v);
+        }
+        return ret;
     }
 
 
@@ -1040,8 +1087,9 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         create_loop_header_for_array_op(rhs_type, loop_info_op);
 
         // Loop body
-        llvm::Value *lhs_addr_element = address_array_ith_element(lhs_type, lhs_addr, loop_info_op.idx_var);
-        llvm::Value *rhs_addr_element = address_array_ith_element(rhs_type, rhs_addr, loop_info_op.idx_var);
+        std::vector<llvm::Value*> idx_val = derref_indexes(loop_info_op.idx_var);
+        llvm::Value *lhs_addr_element = address_array_ith_element(lhs_type, lhs_addr, idx_val);
+        llvm::Value *rhs_addr_element = address_array_ith_element(rhs_type, rhs_addr, idx_val);
         create_store(llvm_visitor->ir_builder->CreateLoad(rhs_addr_element),
                      lhs_addr_element);
         create_loop_footer_for_array_op(rhs_type, loop_info_op);
@@ -1128,28 +1176,13 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
         if (lhs_type.no_ref().is_fortran_array() && rhs_type.is_fortran_array())
         {
-            lhs_type = lhs_type.no_ref();
-            if (!lhs_type.array_is_vla() && !lhs_type.array_is_region()
-                && !lhs_type.array_requires_descriptor()
-                && !rhs_type.array_is_vla()
-                && !rhs_type.array_is_region()
-                && !rhs_type.array_requires_descriptor())
-            {
-                // If both are statically sized arrays we use LLVM IR
-                // feature of array-wise operations
-                // FIXME: This looks a bit off
-                llvm_visitor->ir_builder->CreateStore(vrhs, vlhs);
-            }
-            else
-            {
-                array_assignment(node.get_lhs(),
-                                 node.get_rhs(),
-                                 lhs_type,
-                                 rhs_type,
-                                 vlhs,
-                                 vrhs,
-                                 get_assig_op(lhs_type, rhs_type));
-            }
+            array_assignment(node.get_lhs(),
+                             node.get_rhs(),
+                             lhs_type,
+                             rhs_type,
+                             vlhs,
+                             vrhs,
+                             get_assig_op(lhs_type, rhs_type));
         }
         else if (!lhs_type.no_ref().is_fortran_array()
                  && !rhs_type.is_fortran_array())
@@ -1446,13 +1479,11 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
 
     template <typename Create>
-    void arithmetic_binary_operator_array(const Nodecl::NodeclBase &lhs,
+    void arithmetic_binary_operator_array(const Nodecl::NodeclBase &node,
+                                          const Nodecl::NodeclBase &lhs,
                                           const Nodecl::NodeclBase &rhs,
                                           Create create)
     {
-        // This is very naively implemented: basically we allocate an array big
-        // enough for the result and then we iterate the elements of the operands.
-
         TL::Type lhs_type = lhs.get_type();
         TL::Type rhs_type = rhs.get_type();
 
@@ -1475,7 +1506,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
         // Allocate space for the result
         llvm::Value *result_addr = llvm_visitor->ir_builder->CreateAlloca(
-            llvm_visitor->get_llvm_type(lhs_element_type), array_size);
+                llvm_visitor->get_llvm_type(lhs_element_type), array_size);
 
         // Index inside the contiguous result array. This is used for looping.
         llvm::Value *result_idx_addr = llvm_visitor->ir_builder->CreateAlloca(
@@ -1485,8 +1516,9 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
         LoopInfoOp loop_info_op;
         create_loop_header_for_array_op(rhs_type, loop_info_op);
-        llvm::Value *lhs_addr_element = address_array_ith_element(lhs_type, lhs_addr, loop_info_op.idx_var);
-        llvm::Value *rhs_addr_element = address_array_ith_element(rhs_type, rhs_addr, loop_info_op.idx_var);
+        std::vector<llvm::Value*> idx_val = derref_indexes(loop_info_op.idx_var);
+        llvm::Value *lhs_addr_element = address_array_ith_element(lhs_type, lhs_addr, idx_val);
+        llvm::Value *rhs_addr_element = address_array_ith_element(rhs_type, rhs_addr, idx_val);
         llvm::Value *val_op
             = create(lhs,
                      rhs,
@@ -1534,7 +1566,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         {
             if (lhs_type.is_fortran_array() == rhs_type.is_fortran_array())
                 return arithmetic_binary_operator_array(
-                        lhs, rhs, create);
+                        node, lhs, rhs, create);
             else
                 internal_error("Code unreachable. Inconsistent types in operators", 0);
         }
@@ -2507,6 +2539,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         walk(node.get_nest());
     }
 
+    // FIXME - Use GEP when possible
     llvm::Value *address_of_subscripted_array_no_descriptor(
         const Nodecl::ArraySubscript &node)
     {
@@ -2514,20 +2547,10 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         TL::Type subscripted_type = subscripted.get_type();
         TL::Type subscripted_type_noref = subscripted_type.no_ref();
 
-        bool is_vla = subscripted_type_noref.array_is_vla();
-
         Nodecl::List subscripts = node.get_subscripts().as<Nodecl::List>();
         std::vector<llvm::Value *> offset_list, size_list;
-        if (is_vla)
-        {
-            offset_list.reserve(subscripts.size());
-            size_list.reserve(subscripts.size());
-        }
-        else
-        {
-            offset_list.reserve(subscripts.size() + 1);
-            offset_list.push_back(llvm_visitor->get_integer_value_32(0));
-        }
+        offset_list.reserve(subscripts.size());
+        size_list.reserve(subscripts.size());
 
         TL::Type current_array_type = subscripted_type_noref;
         for (Nodecl::NodeclBase index : subscripts)
@@ -2553,67 +2576,54 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 = llvm_visitor->ir_builder->CreateSub(val_idx, val_lower);
             offset_list.push_back(val_offset);
 
-            if (is_vla)
-            {
-                llvm::Value *val_size = llvm_visitor->ir_builder->CreateAdd(
-                    llvm_visitor->ir_builder->CreateSub(val_upper, val_lower),
-                    llvm_visitor->get_integer_value_64(1));
-                size_list.push_back(val_size);
-            }
+            llvm::Value *val_size = llvm_visitor->ir_builder->CreateAdd(
+                llvm_visitor->ir_builder->CreateSub(val_upper, val_lower),
+                llvm_visitor->get_integer_value_64(1));
+            size_list.push_back(val_size);
 
             current_array_type = current_array_type.array_element();
         }
 
         llvm::Value *subscripted_val
             = llvm_visitor->eval_expression(subscripted);
-        if (!is_vla)
-        {
-            // For constant sized arrays use a GEP
-            return llvm_visitor->ir_builder->CreateGEP(subscripted_val,
-                                                       offset_list);
-        }
-        else
-        {
-            // Otherwise just compute an offset in elements using Horner's rule.
-            std::vector<llvm::Value *>::iterator it_offsets
-                = offset_list.begin();
-            std::vector<llvm::Value *>::iterator it_sizes = size_list.begin();
 
-            llvm::Value *val_addr = *it_offsets;
+        // Compute an offset in elements using Horner's rule.
+        std::vector<llvm::Value *>::iterator it_offsets = offset_list.begin();
+        std::vector<llvm::Value *>::iterator it_sizes = size_list.begin();
+
+        llvm::Value *val_addr = *it_offsets;
+        it_offsets++;
+        it_sizes++;
+
+        while (it_offsets != offset_list.end() && it_sizes != size_list.end())
+        {
+            val_addr = llvm_visitor->ir_builder->CreateAdd(
+                *it_offsets,
+                llvm_visitor->ir_builder->CreateMul(*it_sizes, val_addr));
+
             it_offsets++;
             it_sizes++;
-
-            while (it_offsets != offset_list.end()
-                   && it_sizes != size_list.end())
-            {
-                val_addr = llvm_visitor->ir_builder->CreateAdd(
-                    *it_offsets,
-                    llvm_visitor->ir_builder->CreateMul(*it_sizes, val_addr));
-
-                it_offsets++;
-                it_sizes++;
-            }
-            ERROR_CONDITION(it_offsets != offset_list.end()
-                                || it_sizes != size_list.end(),
-                            "Lists do not match",
-                            0);
-
-            // Now multiply by the size of the type to get an offset in bytes
-            ERROR_CONDITION(current_array_type.is_fortran_array(),
-                            "Should not be an array here",
-                            0);
-            val_addr = llvm_visitor->ir_builder->CreateMul(
-                val_addr, llvm_visitor->eval_sizeof_64(current_array_type));
-
-            // And add this offset in bytes to the base
-            val_addr = llvm_visitor->ir_builder->CreateAdd(
-                llvm_visitor->ir_builder->CreatePtrToInt(
-                    subscripted_val, llvm_visitor->llvm_types.i64),
-                val_addr);
-
-            return llvm_visitor->ir_builder->CreateIntToPtr(
-                val_addr, subscripted_val->getType());
         }
+        ERROR_CONDITION(it_offsets != offset_list.end()
+                            || it_sizes != size_list.end(),
+                        "Lists do not match",
+                        0);
+
+        // Now multiply by the size of the type to get an offset in bytes
+        ERROR_CONDITION(current_array_type.is_fortran_array(),
+                        "Should not be an array here",
+                        0);
+        val_addr = llvm_visitor->ir_builder->CreateMul(
+            val_addr, llvm_visitor->eval_sizeof_64(current_array_type));
+
+        // And add this offset in bytes to the base
+        val_addr = llvm_visitor->ir_builder->CreateAdd(
+            llvm_visitor->ir_builder->CreatePtrToInt(
+                subscripted_val, llvm_visitor->llvm_types.i64),
+            val_addr);
+
+        return llvm_visitor->ir_builder->CreateIntToPtr(
+            val_addr, subscripted_val->getType());
     }
 
     llvm::Value *address_of_subscripted_array_descriptor(
@@ -2827,25 +2837,14 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 if (it_param->no_ref().is_fortran_array())
                 {
                     TL::Type array_type = it_param->no_ref();
-                    if (array_type.array_is_vla())
-                    {
-                        TL::Type element_type = array_type.array_base_element();
+                    TL::Type element_type = array_type.array_base_element();
 
-                        // Cast to a pointer of the element
-                        varg = llvm_visitor->ir_builder->CreateBitCast(
-                                varg,
-                                llvm::PointerType::get(
-                                    llvm_visitor->get_llvm_type(element_type),
-                                    /* AddressSpace */ 0));
-                    }
-                    else if (array_type.array_requires_descriptor())
-                    {
-                        internal_error("Not yet implemented", 0);
-                    }
-                    else
-                    {
-                        // Nothing special has to be done
-                    }
+                    // Cast to a pointer of the element
+                    varg = llvm_visitor->ir_builder->CreateBitCast(
+                        varg,
+                        llvm::PointerType::get(
+                            llvm_visitor->get_llvm_type(element_type),
+                            /* AddressSpace */ 0));
                 }
             }
 
@@ -3105,17 +3104,6 @@ llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
         // tuple: real, imag
         return llvm::VectorType::get(base_type, 2);
     }
-    else if (t.is_fortran_array()
-            && !t.array_requires_descriptor()
-            && !t.array_is_vla())
-    {
-        // Statically sized arrays
-        Nodecl::NodeclBase size = t.array_get_size();
-        ERROR_CONDITION(!size.is_constant(), "Invalid size", 0);
-
-        return llvm::ArrayType::get(get_llvm_type(t.array_element()),
-                                    const_value_cast_to_8(size.get_constant()));
-    }
     else if (t.is_fortran_character())
     {
         // FIXME - CHARACTER(LEN=*)
@@ -3126,7 +3114,6 @@ llvm::Type *FortranLLVM::get_llvm_type(TL::Type t)
                                     const_value_cast_to_8(size.get_constant()));
     }
     else if (t.is_fortran_array()
-            && t.array_is_vla()
             && !t.array_requires_descriptor())
     {
         // Use the base element type
@@ -3380,7 +3367,7 @@ void FortranLLVM::emit_variable(TL::Symbol sym)
         return;
 
     llvm::Value *array_size = nullptr;
-    if (sym.get_type().is_fortran_array() && sym.get_type().array_is_vla())
+    if (sym.get_type().is_fortran_array() && !sym.get_type().array_requires_descriptor())
     {
         // Emit size
         TrackLocation loc(this, sym.get_locus());
