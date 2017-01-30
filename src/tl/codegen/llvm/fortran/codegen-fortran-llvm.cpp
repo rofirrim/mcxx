@@ -1030,17 +1030,9 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         ERROR_CONDITION(t.is_fortran_array(),
                         "Should not be an array here",
                         0);
-        val_addr = llvm_visitor->ir_builder->CreateMul(
-            val_addr, llvm_visitor->eval_sizeof_64(t));
 
-        // And add this offset in bytes to the base
-        val_addr = llvm_visitor->ir_builder->CreateAdd(
-            llvm_visitor->ir_builder->CreatePtrToInt(
-                base_address, llvm_visitor->llvm_types.i64),
-            val_addr);
-
-        return llvm_visitor->ir_builder->CreateIntToPtr(
-            val_addr, base_address->getType());
+        return llvm_visitor->ir_builder->CreateGEP(
+                base_address, { val_addr } );
     }
 
     llvm::Value *address_array_ith_element(TL::Type t,
@@ -2584,8 +2576,6 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             current_array_type = current_array_type.array_element();
         }
 
-        llvm::Value *subscripted_val
-            = llvm_visitor->eval_expression(subscripted);
 
         // Compute an offset in elements using Horner's rule.
         std::vector<llvm::Value *>::iterator it_offsets = offset_list.begin();
@@ -2613,17 +2603,13 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         ERROR_CONDITION(current_array_type.is_fortran_array(),
                         "Should not be an array here",
                         0);
-        val_addr = llvm_visitor->ir_builder->CreateMul(
-            val_addr, llvm_visitor->eval_sizeof_64(current_array_type));
 
-        // And add this offset in bytes to the base
-        val_addr = llvm_visitor->ir_builder->CreateAdd(
-            llvm_visitor->ir_builder->CreatePtrToInt(
-                subscripted_val, llvm_visitor->llvm_types.i64),
-            val_addr);
+        llvm::Value *base_addr
+            = llvm_visitor->eval_expression(subscripted);
 
-        return llvm_visitor->ir_builder->CreateIntToPtr(
-            val_addr, subscripted_val->getType());
+        return llvm_visitor->ir_builder->CreateGEP(
+                base_addr,
+                { val_addr });
     }
 
     llvm::Value *address_of_subscripted_array_descriptor(
