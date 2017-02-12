@@ -4858,9 +4858,10 @@ static void check_assignment(AST expr, const decl_context_t* decl_context, nodec
         lvalue_type = nodecl_get_type(nodecl_lvalue);
         nodecl_rvalue = fortran_expression_as_value(nodecl_rvalue);
 
-        if (!equivalent_types(
-                    get_unqualified_type(no_ref(nodecl_get_type(nodecl_lvalue))), 
-                    get_unqualified_type(nodecl_get_type(nodecl_rvalue))))
+        if (!equivalent_types(get_unqualified_type(fortran_get_rank0_type(
+                                  nodecl_get_type(nodecl_lvalue))),
+                              get_unqualified_type(fortran_get_rank0_type(
+                                  nodecl_get_type(nodecl_rvalue)))))
         {
             nodecl_rvalue = nodecl_make_conversion(nodecl_rvalue, 
                     no_ref(lvalue_type),
@@ -6040,7 +6041,7 @@ static int compare_map_items(const void* a, const void* b)
 
 static const char * get_operator_for_expr(AST expr);
 
-static type_t* rerank_type(type_t* rank0_common, type_t* lhs_type, type_t* rhs_type);
+static type_t* rerank_type(type_t* rank0_common, type_t* lhs_type, nodecl_t nodecl_lhs, type_t* rhs_type, nodecl_t nodecl_rhs);
 
 static void conform_types(type_t* lhs_type, type_t* rhs_type, 
         type_t** conf_lhs_type, type_t** conf_rhs_type);
@@ -6243,7 +6244,7 @@ static type_t* compute_result_of_intrinsic_operator(AST expr, const decl_context
     else
     {
         // Restore the rank of the common type
-        result = rerank_type(result, adj_lhs_type, adj_rhs_type);
+        result = rerank_type(result, adj_lhs_type, nodecl_lhs, adj_rhs_type, nodecl_rhs);
 
         const_value_t* val = NULL;
         if (value->compute_const != NULL)
@@ -6261,19 +6262,21 @@ static type_t* compute_result_of_intrinsic_operator(AST expr, const decl_context
         if (convert_to_common)
         {
             if (!nodecl_is_null(nodecl_lhs)
-                    && !equivalent_types(
-                        get_unqualified_type(result), 
-                        get_unqualified_type(nodecl_get_type(nodecl_lhs))))
+                && !equivalent_types(
+                       get_unqualified_type(fortran_get_rank0_type(result)),
+                       get_unqualified_type(fortran_get_rank0_type(
+                           nodecl_get_type(nodecl_lhs)))))
             {
-                nodecl_lhs = nodecl_make_conversion(nodecl_lhs, result, 
-                        nodecl_get_locus(nodecl_lhs));
+                nodecl_lhs = nodecl_make_conversion(
+                    nodecl_lhs, result, nodecl_get_locus(nodecl_lhs));
             }
             if (!equivalent_types(
-                        get_unqualified_type(result), 
-                        get_unqualified_type(nodecl_get_type(nodecl_rhs))))
+                    get_unqualified_type(fortran_get_rank0_type(result)),
+                    get_unqualified_type(
+                        fortran_get_rank0_type(nodecl_get_type(nodecl_rhs)))))
             {
-                nodecl_rhs = nodecl_make_conversion(nodecl_rhs, result, 
-                        nodecl_get_locus(nodecl_rhs));
+                nodecl_rhs = nodecl_make_conversion(
+                    nodecl_rhs, result, nodecl_get_locus(nodecl_rhs));
             }
         }
 
@@ -6383,7 +6386,7 @@ static void conform_types(type_t* lhs_type, type_t* rhs_type,
             /* conform_only_left */ 0);
 }
 
-static type_t* fortran_rebuild_array_type_for_rerank(type_t* rank0_type, type_t* array_type)
+static type_t* fortran_rebuild_array_type_for_rerank(type_t* rank0_type, type_t* array_type, nodecl_t array_name, int dim)
 {
     rank0_type = no_ref(rank0_type);
 
@@ -6396,7 +6399,7 @@ static type_t* fortran_rebuild_array_type_for_rerank(type_t* rank0_type, type_t*
     }
     else
     {
-        type_t* t = fortran_rebuild_array_type(rank0_type, array_type_get_element_type(array_type));
+        type_t* t = fortran_rebuild_array_type_for_rerank(rank0_type, array_type_get_element_type(array_type), array_name, dim - 1);
 
         if (array_type_has_region(array_type))
         {
@@ -6448,9 +6451,94 @@ static type_t* fortran_rebuild_array_type_for_rerank(type_t* rank0_type, type_t*
         }
         else if (array_type_with_descriptor(array_type))
         {
-            return get_array_type_bounds_with_descriptor(t, 
-                    array_type_get_array_lower_bound(array_type),
-                    array_type_get_array_upper_bound(array_type),
+            nodecl_t nodecl_value = array_name;
+
+            // Explicitly materialize the extent based on the array type
+            nodecl_t nodecl_lower;
+            {
+                nodecl_t nodecl_actual_arguments[2] = {
+                    nodecl_make_fortran_actual_argument(
+                        nodecl_shallow_copy(nodecl_value),
+                        nodecl_get_locus(array_name)),
+                    nodecl_make_fortran_actual_argument(
+                        const_value_to_nodecl(const_value_get_signed_int(dim)),
+                        nodecl_get_locus(array_name))
+                };
+
+                scope_entry_t *intrinsic_lbound
+                    = fortran_solve_generic_intrinsic_call(
+                        fortran_query_intrinsic_name_str(
+                            CURRENT_COMPILED_FILE->global_decl_context,
+                            "lbound"),
+                        nodecl_actual_arguments,
+                        /* explicit_num_actual_arguments */ 2,
+                        /* is_call */ 0);
+
+                ERROR_CONDITION(
+                    intrinsic_lbound == NULL,
+                    "Failure while doing an internal call to lbound at %s",
+                    nodecl_get_locus(array_name));
+
+                nodecl_t nodecl_called = nodecl_make_symbol(
+                    intrinsic_lbound, nodecl_get_locus(array_name));
+                nodecl_set_type(nodecl_called,
+                                lvalue_ref(intrinsic_lbound->type_information));
+
+                nodecl_lower = nodecl_make_function_call(
+                    nodecl_called,
+                    nodecl_make_list_2(
+                        nodecl_get_child(nodecl_actual_arguments[0], 0),
+                        nodecl_get_child(nodecl_actual_arguments[1], 0)),
+                    /* generic spec */ nodecl_null(),
+                    /* function form*/ nodecl_null(),
+                    fortran_get_default_integer_type(),
+                    nodecl_get_locus(array_name));
+            }
+
+            nodecl_t nodecl_upper;
+            {
+                nodecl_t nodecl_actual_arguments[2] = {
+                    nodecl_make_fortran_actual_argument(
+                        nodecl_shallow_copy(nodecl_value),
+                        nodecl_get_locus(array_name)),
+                    nodecl_make_fortran_actual_argument(
+                        const_value_to_nodecl(const_value_get_signed_int(dim)),
+                        nodecl_get_locus(array_name))
+                };
+
+                scope_entry_t *intrinsic_ubound
+                    = fortran_solve_generic_intrinsic_call(
+                        fortran_query_intrinsic_name_str(
+                            CURRENT_COMPILED_FILE->global_decl_context,
+                            "ubound"),
+                        nodecl_actual_arguments,
+                        /* explicit_num_actual_arguments */ 2,
+                        /* is_call */ 0);
+
+                ERROR_CONDITION(
+                    intrinsic_ubound == NULL,
+                    "Failure while doing an internal call to ubound at %s",
+                    nodecl_get_locus(array_name));
+
+                nodecl_t nodecl_called = nodecl_make_symbol(
+                    intrinsic_ubound, nodecl_get_locus(array_name));
+                nodecl_set_type(nodecl_called,
+                                lvalue_ref(intrinsic_ubound->type_information));
+
+                nodecl_upper = nodecl_make_function_call(
+                    nodecl_called,
+                    nodecl_make_list_2(
+                        nodecl_get_child(nodecl_actual_arguments[0], 0),
+                        nodecl_get_child(nodecl_actual_arguments[1], 0)),
+                    /* generic spec */ nodecl_null(),
+                    /* function form*/ nodecl_null(),
+                    fortran_get_default_integer_type(),
+                    nodecl_get_locus(array_name));
+            }
+
+            return get_array_type_bounds(t, 
+                    nodecl_lower,
+                    nodecl_upper,
                     array_type_get_array_size_expr_context(array_type));
         }
         else 
@@ -6463,7 +6551,18 @@ static type_t* fortran_rebuild_array_type_for_rerank(type_t* rank0_type, type_t*
     }
 }
 
-static type_t* rerank_type(type_t* rank0_common, type_t* lhs_type, type_t* rhs_type)
+static int classify_array_type(type_t *t)
+{
+    ERROR_CONDITION(!fortran_is_array_type(t), "Invalid type", 0);
+
+    if (array_type_with_descriptor(t))
+        return 2;
+    else if (array_type_is_vla(t))
+        return 1;
+    else return 0;
+}
+
+static type_t* rerank_type(type_t* rank0_common, type_t* lhs_type, nodecl_t nodecl_lhs, type_t* rhs_type, nodecl_t nodecl_rhs)
 {
     lhs_type = no_ref(lhs_type);
     rhs_type = no_ref(rhs_type);
@@ -6471,14 +6570,29 @@ static type_t* rerank_type(type_t* rank0_common, type_t* lhs_type, type_t* rhs_t
     ERROR_CONDITION(!fortran_is_scalar_type(rank0_common)
             && !fortran_is_character_type(rank0_common), "Invalid rank0 type", 0);
 
-    if (fortran_is_array_type(lhs_type))
+    if (fortran_is_array_type(lhs_type)
+            || fortran_is_array_type(rhs_type))
     {
-        // They should have the same rank and shape so it does not matter very much which one we use, right?
-        return fortran_rebuild_array_type_for_rerank(rank0_common, lhs_type);
-    }
-    else if (fortran_is_array_type(rhs_type))
-    {
-        return fortran_rebuild_array_type_for_rerank(rank0_common, rhs_type);
+        char use_lhs = 0;
+        if (fortran_is_array_type(lhs_type) && fortran_is_array_type(rhs_type))
+        {
+
+            // Choose the most convenient
+            use_lhs = classify_array_type(lhs_type)
+                      <= classify_array_type(rhs_type);
+        }
+        else
+        {
+            use_lhs = fortran_is_array_type(lhs_type);
+        }
+        type_t *used_array_type = use_lhs ? lhs_type : rhs_type;
+        nodecl_t used_nodecl = use_lhs ? nodecl_lhs : nodecl_rhs;
+
+        return fortran_rebuild_array_type_for_rerank(
+            rank0_common,
+            used_array_type,
+            used_nodecl,
+            /* dim */ fortran_get_rank_of_type(used_array_type));
     }
     else
     {
