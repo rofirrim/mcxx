@@ -850,9 +850,6 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
             llvm_visitor->ir_builder->CreateStore(llvm_visitor->get_integer_value_64(0), idx_var);
 
-            llvm_visitor->ir_builder->CreateBr(block_check);
-            llvm_visitor->set_current_block(block_check);
-
             llvm::Value *vstride = nullptr;
             llvm::Value *vupper = nullptr;
             llvm::Value *vlower = nullptr;
@@ -860,10 +857,10 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             {
                 vstride = llvm_visitor->ir_builder->CreateLoad(
                     llvm_visitor->array_descriptor_addr_dim_stride(addr, i));
-                vupper = llvm_visitor->ir_builder->CreateLoad(
+                vlower = llvm_visitor->ir_builder->CreateLoad(
                     llvm_visitor->array_descriptor_addr_dim_lower_bound(addr,
                                                                         i));
-                vlower = llvm_visitor->ir_builder->CreateLoad(
+                vupper = llvm_visitor->ir_builder->CreateLoad(
                     llvm_visitor->array_descriptor_addr_dim_upper_bound(addr,
                                                                         i));
             }
@@ -891,6 +888,9 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                     llvm_visitor->ir_builder->CreateSub(vupper, vlower),
                     vstride),
                 vstride);
+
+            llvm_visitor->ir_builder->CreateBr(block_check);
+            llvm_visitor->set_current_block(block_check);
 
             llvm::Value *vcheck = llvm_visitor->ir_builder->CreateICmpSLT(
                 llvm_visitor->ir_builder->CreateLoad(idx_var), loop_upper);
@@ -963,16 +963,15 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             llvm::Value *val_stride = llvm_visitor->ir_builder->CreateLoad(
                 llvm_visitor->array_descriptor_addr_dim_stride(descr_address,
                                                                i));
-            llvm::Value *offset
-                = llvm_visitor->ir_builder->CreateMul(indexes[i], val_stride);
-
-            offset_list.push_back(offset);
-
 
             llvm::Value *val_size = llvm_visitor->ir_builder->CreateAdd(
                 llvm_visitor->ir_builder->CreateSub(val_upper, val_lower),
                 llvm_visitor->get_integer_value_64(1));
             size_list.push_back(val_size);
+
+            llvm::Value *offset
+                = llvm_visitor->ir_builder->CreateMul(indexes[i], val_stride);
+            offset_list.push_back(offset);
 
             t = t.array_element();
         }
@@ -999,16 +998,12 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                         "Lists do not match",
                         0);
 
-        // Now multiply by the size of the type to get an offset in bytes
         ERROR_CONDITION(t.is_fortran_array(),
                         "Should not be an array here",
                         0);
 
-        llvm::Value *base_address
-            = llvm_visitor->ir_builder->CreateLoad(llvm_visitor->gep_for_field(
-                descr_address->getType()->getPointerElementType(),
-                descr_address,
-                { "base_addr" }));
+        llvm::Value *base_address = llvm_visitor->ir_builder->CreateLoad(
+            llvm_visitor->array_descriptor_addr_base_addr(descr_address));
 
         base_address = llvm_visitor->ir_builder->CreatePointerCast(
             base_address,
@@ -2686,16 +2681,11 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
         llvm::Value *descriptor_addr
             = llvm_visitor->eval_expression(subscripted);
-        llvm::Type *descriptor_type
-            = descriptor_addr->getType()->getPointerElementType();
 
         Nodecl::List subscripts_tree = node.get_subscripts().as<Nodecl::List>();
         // Reverse subscripts as in the tree are represented in the C order
         TL::ObjectList<Nodecl::NodeclBase> subscripts(subscripts_tree.rbegin(),
                                                       subscripts_tree.rend());
-
-        llvm::Type *descriptor_dimension
-            = llvm_visitor->gfortran_rt.descriptor_dimension.get();
 
         llvm::Value *linear_index = nullptr;
         int rank = 0;
@@ -2709,15 +2699,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                     llvm_visitor->eval_expression(*it),
                     llvm_visitor->llvm_types.i64),
                 llvm_visitor->ir_builder->CreateLoad(
-                    llvm_visitor->ir_builder->CreateGEP(
-                        descriptor_addr,
-                        { llvm_visitor->get_integer_value_32(0),
-                          llvm_visitor->get_integer_value_32(
-                              llvm_visitor->fields[descriptor_type]["dim"]),
-                          llvm_visitor->get_integer_value_32(rank),
-                          llvm_visitor->get_integer_value_32(
-                              llvm_visitor->fields[descriptor_dimension]
-                                                  ["stride"]) })));
+                    llvm_visitor->array_descriptor_addr_dim_stride(
+                        descriptor_addr, rank)));
 
             if (linear_index == nullptr)
                 linear_index = current;
@@ -2726,9 +2709,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                                                                    current);
         }
 
-        llvm::Value *offset_value
-            = llvm_visitor->ir_builder->CreateLoad(llvm_visitor->gep_for_field(
-                descriptor_type, descriptor_addr, { "offset" }));
+        llvm::Value *offset_value = llvm_visitor->ir_builder->CreateLoad(
+            llvm_visitor->array_descriptor_addr_offset(descriptor_addr));
 
         linear_index
             = llvm_visitor->ir_builder->CreateAdd(linear_index, offset_value);
@@ -2736,9 +2718,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         TL::Type element_type
             = subscripted_type_noref.fortran_array_base_element();
 
-        llvm::Value *base_address
-            = llvm_visitor->ir_builder->CreateLoad(llvm_visitor->gep_for_field(
-                descriptor_type, descriptor_addr, { "base_addr" }));
+        llvm::Value *base_address = llvm_visitor->ir_builder->CreateLoad(
+            llvm_visitor->array_descriptor_addr_base_addr(descriptor_addr));
         base_address = llvm_visitor->ir_builder->CreatePointerCast(
             base_address,
             llvm::PointerType::get(llvm_visitor->get_llvm_type(element_type),
@@ -2793,7 +2774,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         TL::Symbol called_sym = called.get_symbol();
 
         if (called_sym.is_builtin())
-            internal_error("Builtin calls not yet implemented", 0);
+            return implement_builtin_call(node);
 
         TL::Type called_type = called_sym.get_type();
         ERROR_CONDITION(
@@ -2952,8 +2933,136 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     // void visit(const Nodecl::Postincrement& node);
     // void visit(const Nodecl::Predecrement& node);
     // void visit(const Nodecl::Postdecrement& node);
+
+  private:
+    typedef void (FortranVisitorLLVMExpression::*BuiltinImplFunc)(
+        const Nodecl::FunctionCall &node);
+
+    struct BuiltinImpl
+    {
+        BuiltinImplFunc func = nullptr;
+        bool use_constant = false;
+    };
+
+    // See the definition below
+    static std::map<std::string, BuiltinImpl> builtin_impl;
+
+    void implement_builtin_call(const Nodecl::FunctionCall &node)
+    {
+        Nodecl::NodeclBase called = node.get_called();
+        Nodecl::List arguments = node.get_arguments().as<Nodecl::List>();
+
+        ERROR_CONDITION(
+            !called.is<Nodecl::Symbol>(), "We can only call functions", 0);
+        TL::Symbol called_sym = called.get_symbol();
+
+        BuiltinImpl &impl = builtin_impl[called_sym.get_name()];
+        if (impl.use_constant && node.is_constant())
+        {
+            value = llvm_visitor->eval_constant(node.get_constant());
+            return;
+        }
+        if (impl.func == nullptr)
+        {
+            internal_error("No implementation for builtin '%s'\n", called_sym.get_name().c_str());
+        }
+
+        return (this->*(impl.func))(node);
+    }
+
+    void builtin_xbound(const Nodecl::FunctionCall &node, bool is_lbound)
+    {
+        Nodecl::List args = node.get_arguments().as<Nodecl::List>();
+        Nodecl::NodeclBase array = args[0];
+        Nodecl::NodeclBase dim = args.size() > 1 ? args[1] : Nodecl::NodeclBase();
+        // KIND is already represented as the type of the node
+
+        // FIXME: Implement array version of this
+        if (dim.is_null())
+            internal_error("Not yet implemented", 0);
+
+        int dim_val = const_value_cast_to_4(dim.get_constant());
+        TL::Type t = array.get_type().no_ref();
+        ERROR_CONDITION(dim_val > t.fortran_rank(), "Invalid dimension %d > %d", dim_val, t.fortran_rank());
+        if (t.array_requires_descriptor())
+        {
+            llvm::Value *descriptor_addr = llvm_visitor->eval_expression(array);
+
+            llvm::Value *xbound_field
+                = is_lbound ?
+                      llvm_visitor->array_descriptor_addr_dim_lower_bound(descriptor_addr,
+                                                            dim_val - 1) :
+                      llvm_visitor->array_descriptor_addr_dim_upper_bound(descriptor_addr,
+                                                            dim_val - 1);
+
+            value = llvm_visitor->ir_builder->CreateLoad(xbound_field);
+        }
+        else
+        {
+            for (int i = 0; i < dim_val; i++)
+            {
+                t = t.array_element();
+            }
+            ERROR_CONDITION(!t.is_fortran_array(), "Invalid type", 0);
+
+            Nodecl::NodeclBase lower, upper;
+            t.array_get_bounds(lower, upper);
+
+            Nodecl::NodeclBase xbound = is_lbound ? lower : upper;
+
+            value = llvm_visitor->eval_expression(xbound);
+        }
+
+        value = llvm_visitor->ir_builder->CreateZExtOrTrunc(
+            value, llvm_visitor->get_llvm_type(node.get_type()));
+    }
+
+    void builtin_lbound(const Nodecl::FunctionCall &node)
+    {
+        return builtin_xbound(node, /* is_lbound */ true);
+    }
+
+    void builtin_ubound(const Nodecl::FunctionCall &node)
+    {
+        return builtin_xbound(node, /* is_lbound */ false);
+    }
 };
 
+std::map<std::string, FortranVisitorLLVMExpression::BuiltinImpl>
+    FortranVisitorLLVMExpression::builtin_impl
+    = { { "lbound", { &FortranVisitorLLVMExpression::builtin_lbound, true } },
+        { "ubound", { &FortranVisitorLLVMExpression::builtin_ubound, true } } };
+
+llvm::Value *FortranLLVM::eval_constant(const_value_t *cval)
+{
+    if (const_value_is_integer(cval))
+    {
+        // FIXME: This should be elsewhere
+        llvm::Type *t = nullptr;
+        switch (const_value_get_bytes(cval))
+        {
+            case 1:
+                t = llvm_types.i8;
+            case 2:
+                t = llvm_types.i16;
+            case 4:
+                t = llvm_types.i32;
+            case 8:
+                t = llvm_types.i64;
+            default:
+                internal_error("Code unreachable", 0);
+        }
+        return llvm::Constant::getIntegerValue(t,
+                llvm::APInt(const_value_get_bytes(cval) * 8,
+                    const_value_cast_to_8(cval),
+                    const_value_is_signed(cval)));
+    }
+    else
+    {
+        internal_error("Constant evaluation of '%s' not implemented yet",
+                       const_value_to_str(cval));
+    }
+}
 
 llvm::Value *FortranLLVM::eval_expression(Nodecl::NodeclBase n)
 {
@@ -3351,19 +3460,48 @@ llvm::Value* FortranLLVM::array_descriptor_addr_dim_data(llvm::Value *descriptor
           get_integer_value_32(fields[descr_dim_type][field]) });
 }
 
-llvm::Value* FortranLLVM::array_descriptor_addr_dim_lower_bound(llvm::Value *descriptor_addr, int dimension)
+llvm::Value *FortranLLVM::array_descriptor_addr_dim_lower_bound(
+    llvm::Value *descriptor_addr, int dimension)
 {
-    return array_descriptor_addr_dim_data(descriptor_addr, dimension, "lower_bound");
+    return array_descriptor_addr_dim_data(
+        descriptor_addr, dimension, "lower_bound");
 }
 
-llvm::Value* FortranLLVM::array_descriptor_addr_dim_upper_bound(llvm::Value *descriptor_addr, int dimension)
+llvm::Value *FortranLLVM::array_descriptor_addr_dim_upper_bound(
+    llvm::Value *descriptor_addr, int dimension)
 {
-    return array_descriptor_addr_dim_data(descriptor_addr, dimension, "upper_bound");
+    return array_descriptor_addr_dim_data(
+        descriptor_addr, dimension, "upper_bound");
 }
 
-llvm::Value* FortranLLVM::array_descriptor_addr_dim_stride(llvm::Value *descriptor_addr, int dimension)
+llvm::Value *FortranLLVM::array_descriptor_addr_dim_stride(
+    llvm::Value *descriptor_addr, int dimension)
 {
     return array_descriptor_addr_dim_data(descriptor_addr, dimension, "stride");
+}
+
+llvm::Value *FortranLLVM::array_descriptor_addr_base_addr(
+    llvm::Value *descriptor_addr)
+{
+    return gep_for_field(descriptor_addr->getType()->getPointerElementType(),
+                         descriptor_addr,
+                         { "base_addr" });
+}
+
+llvm::Value *FortranLLVM::array_descriptor_addr_offset(
+    llvm::Value *descriptor_addr)
+{
+    return gep_for_field(descriptor_addr->getType()->getPointerElementType(),
+                         descriptor_addr,
+                         { "offset" });
+}
+
+llvm::Value *FortranLLVM::array_descriptor_addr_dtype(
+    llvm::Value *descriptor_addr)
+{
+    return gep_for_field(descriptor_addr->getType()->getPointerElementType(),
+                         descriptor_addr,
+                         { "dtype" });
 }
 
 llvm::Value* FortranLLVM::eval_elements_of_dimension(TL::Type t, llvm::Value *addr, int dimension)
@@ -3495,7 +3633,7 @@ void FortranLLVM::emit_variable(TL::Symbol sym)
             // FIXME - I think there is a zeroinitializer for these cases.
             ir_builder->CreateStore(
                 llvm::ConstantPointerNull::get(llvm_types.ptr_i8),
-                gep_for_field(llvm_type, allocation, { "base_addr" }));
+                array_descriptor_addr_base_addr(allocation));
         }
         else
         {
@@ -3734,9 +3872,7 @@ void FortranLLVM::allocate_array(const Nodecl::ArraySubscript &array_subscript)
     // base_addr is null
     llvm::Value *descriptor_addr = get_value(symbol);
     llvm::Value *field_addr_base_address
-        = gep_for_field(descriptor_addr->getType()->getPointerElementType(),
-                        descriptor_addr,
-                        { "base_addr" });
+        = array_descriptor_addr_base_addr(descriptor_addr);
     llvm::Value *val_base_address
         = ir_builder->CreateLoad(field_addr_base_address);
 
@@ -3841,11 +3977,9 @@ void FortranLLVM::visit(const Nodecl::FortranDeallocateStatement& node)
         }
 
         llvm::Value *descriptor_addr = get_value(symbol);
-        llvm::Type *descriptor_type
-            = descriptor_addr->getType()->getPointerElementType();
 
         llvm::Value *field_addr_base_addr
-            = gep_for_field(descriptor_type, descriptor_addr, { "base_addr" });
+            = array_descriptor_addr_base_addr(descriptor_addr);
 
         llvm::BasicBlock *already_deallocated = llvm::BasicBlock::Create(
             llvm_context, "allocate.already_deallocated", get_current_function());
@@ -3897,12 +4031,10 @@ void FortranLLVM::fill_descriptor_info(int rank,
                     "Mismatch between rank and strides",
                     0);
 
-    llvm::Type *descriptor_type = descriptor_addr->getType()->getPointerElementType();
-
     llvm::Value *field_addr_base_address
-        = gep_for_field(descriptor_type, descriptor_addr, { "base_addr" });
+        = array_descriptor_addr_base_addr(descriptor_addr);
     llvm::Value *field_addr_offset
-        = gep_for_field(descriptor_type, descriptor_addr, { "offset" });
+        = array_descriptor_addr_offset(descriptor_addr);
 
     llvm::Value *offset_value = nullptr;
     std::vector<llvm::Value*> descr_strides(rank, nullptr);
@@ -3966,7 +4098,7 @@ void FortranLLVM::fill_descriptor_info(int rank,
 
     llvm::Value *dtype_value = get_integer_value_64(rank | (type_id << 3) | (size_type << 6));
     llvm::Value *field_addr_dtype
-        = gep_for_field(descriptor_type, descriptor_addr, { "dtype" });
+        = array_descriptor_addr_dtype(descriptor_addr);
     ir_builder->CreateStore(dtype_value, field_addr_dtype);
 
     // Ranks

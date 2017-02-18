@@ -314,6 +314,9 @@ namespace Codegen
                 }
         };
 
+        // Evaluate a constant
+        llvm::Value *eval_constant(const_value_t*);
+
         // Evaluates a Fortran expression
         llvm::Value *eval_expression(Nodecl::NodeclBase n);
 
@@ -404,6 +407,12 @@ namespace Codegen
             int dimension,
             const std::string &field);
 
+        llvm::Value *array_descriptor_addr_base_addr(
+            llvm::Value *descriptor_addr);
+        llvm::Value *array_descriptor_addr_offset(
+            llvm::Value *descriptor_addr);
+        llvm::Value *array_descriptor_addr_dtype(
+            llvm::Value *descriptor_addr);
         llvm::Value *array_descriptor_addr_dim_lower_bound(
             llvm::Value *descriptor_addr, int dimension);
         llvm::Value *array_descriptor_addr_dim_upper_bound(
