@@ -34,6 +34,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/DIBuilder.h"
+#include "llvm/IR/MDBuilder.h"
 
 #include <map>
 
@@ -100,6 +101,7 @@ namespace Codegen
         llvm::LLVMContext llvm_context;
         std::unique_ptr<llvm::Module> current_module;
         std::unique_ptr<llvm::IRBuilder<> > ir_builder;
+        std::unique_ptr<llvm::MDBuilder > md_builder;
         std::unique_ptr<llvm::DIBuilder > dbg_builder;
 
         struct FunctionInfo
@@ -226,6 +228,7 @@ namespace Codegen
         void initialize_llvm_context();
         void initialize_llvm_types();
         void initialize_gfortran_runtime();
+        void initialize_aliasing_info();
         llvm::Type* get_gfortran_array_descriptor_type(TL::Type t);
         void gfortran_runtime_error(const locus_t *, const std::string &str);
 

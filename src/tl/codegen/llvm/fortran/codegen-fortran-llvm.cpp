@@ -132,7 +132,8 @@ void FortranLLVM::visit(const Nodecl::TopLevel &node)
 
     ir_builder = std::unique_ptr<llvm::IRBuilder<> >(
         new llvm::IRBuilder<>(llvm_context));
-
+    md_builder
+        = std::unique_ptr<llvm::MDBuilder>(new llvm::MDBuilder(llvm_context));
     dbg_builder = std::unique_ptr<llvm::DIBuilder>(
         new llvm::DIBuilder(*current_module));
 
@@ -4440,10 +4441,16 @@ llvm::Type* FortranLLVM::get_gfortran_array_descriptor_type(TL::Type t)
     return struct_type;
 }
 
+void FortranLLVM::initialize_aliasing_info()
+{
+    // tbaa_root = md_builder->createTBAARoot("Fortran 95 aliasing");
+}
+
 void FortranLLVM::initialize_llvm_context()
 {
     initialize_llvm_types();
     initialize_gfortran_runtime();
+    initialize_aliasing_info();
 }
 
 void FortranLLVM::emit_main(llvm::Function *fortran_program)
