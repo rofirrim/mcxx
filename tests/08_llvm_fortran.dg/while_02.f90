@@ -1,3 +1,7 @@
+! <testinfo>
+! test_generator="config/mercurium-fortran-llvm run"
+! test_stdout="while_02.f90.out"
+! </testinfo>
 PROGRAM MAIN
     IMPLICIT NONE
     INTEGER :: I
