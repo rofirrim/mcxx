@@ -366,8 +366,10 @@ namespace Codegen
         void emit_variable(TL::Symbol sym);
 
         // Takes into account region arrays
-        llvm::Value* eval_elements_of_dimension(TL::Type t);
-        llvm::Value* eval_elements_of_array(TL::Type sym);
+        llvm::Value *eval_elements_of_dimension(TL::Type t,
+                                                llvm::Value *addr,
+                                                int dimension);
+        llvm::Value *eval_elements_of_array(TL::Type t, llvm::Value *addr);
 
         // Only considers array types
         llvm::Value* eval_size_of_dimension(TL::Type t);
@@ -393,6 +395,18 @@ namespace Codegen
 
         llvm::Constant* get_integer_value_32(int64_t v);
         llvm::Constant* get_integer_value_64(int64_t v);
+
+        llvm::Value *array_descriptor_addr_dim_data(
+            llvm::Value *descriptor_addr,
+            int dimension,
+            const std::string &field);
+
+        llvm::Value *array_descriptor_addr_dim_lower_bound(
+            llvm::Value *descriptor_addr, int dimension);
+        llvm::Value *array_descriptor_addr_dim_upper_bound(
+            llvm::Value *descriptor_addr, int dimension);
+        llvm::Value *array_descriptor_addr_dim_stride(
+            llvm::Value *descriptor_addr, int dimension);
 
         void emit_main(llvm::Function *fortran_program);
 
