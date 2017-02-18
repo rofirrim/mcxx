@@ -8,11 +8,12 @@ os:
 before_install:
     - wget -O - http://apt.llvm.org/llvm-snapshot.gpg.key|sudo apt-key add -
     - sudo add-apt-repository -s 'deb http://apt.llvm.org/trusty/ llvm-toolchain-trusty-4.0 main'
+    - sudo add-apt-repository ppa:ubuntu-toolchain-r/test
     - sudo apt-get update -qq
-    - sudo apt-get install -qq -y flex bison gperf gfortran libsqlite3-dev clang-4.0 llvm-4.0-dev
+    - sudo apt-get install -qq -y gcc-6 flex bison gperf gfortran libsqlite3-dev clang-4.0 llvm-4.0-dev
 script:
     - "autoreconf -fiv &&
-    ./configure CFLAGS=\"-O0\" CXXFLAGS=\"-O0\" LLVM_CONFIG=\"/usr/bin/llvm-config-4.0\" --prefix=$HOME/mcxx-install --enable-fortran-llvm-codegen &&
+    ./configure CC=gcc-6 CXX=g++-6 CFLAGS=\"-O0\" CXXFLAGS=\"-O0\" LLVM_CONFIG=\"/usr/bin/llvm-config-4.0\" --prefix=$HOME/mcxx-install --enable-fortran-llvm-codegen &&
     make -j$(nproc) &&
     make install &&
     make check"
