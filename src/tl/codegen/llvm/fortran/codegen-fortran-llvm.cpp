@@ -813,7 +813,9 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         std::vector<llvm::BasicBlock *> block_end;
     };
 
-    void create_loop_header_for_array_op(TL::Type t,
+    void create_loop_header_for_array_op(
+            Nodecl::NodeclBase expr,
+            TL::Type t,
             llvm::Value *addr,
             /* out */
             LoopInfoOp &loop_info_op
@@ -855,13 +857,17 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             llvm::Value *vlower = nullptr;
             if (t.array_requires_descriptor())
             {
-                vstride = llvm_visitor->ir_builder->CreateLoad(
-                    llvm_visitor->array_descriptor_addr_dim_stride(addr, i));
-                vlower = llvm_visitor->ir_builder->CreateLoad(
-                    llvm_visitor->array_descriptor_addr_dim_lower_bound(addr,
-                                                                        i));
+                if (llvm_visitor->array_expression_will_use_unit_stride(expr))
+                    vstride = llvm_visitor->get_integer_value_64(1);
+                else
+                    vstride = llvm_visitor->ir_builder->CreateLoad(
+                        llvm_visitor->array_descriptor_addr_dim_stride(addr,
+                                                                       i));
                 vupper = llvm_visitor->ir_builder->CreateLoad(
                     llvm_visitor->array_descriptor_addr_dim_upper_bound(addr,
+                                                                        i));
+                vlower = llvm_visitor->ir_builder->CreateLoad(
+                    llvm_visitor->array_descriptor_addr_dim_lower_bound(addr,
                                                                         i));
             }
             else if (t.array_is_region())
@@ -946,9 +952,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         llvm::Value *descr_address,
         const std::vector<llvm::Value *> indexes)
     {
-        bool unit_stride = array.no_conv().is<Nodecl::Symbol>()
-            && array.no_conv().get_type().no_ref().is_fortran_array();
-
+        bool unit_stride = llvm_visitor->array_expression_will_use_unit_stride(array);
         int rank = t.fortran_rank();
 
         // Horner
@@ -958,6 +962,16 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
         for (int i = 0; i < rank; i++)
         {
+            llvm::Value *offset = indexes[i];
+            if (!unit_stride)
+            {
+                llvm::Value* val_stride = llvm_visitor->ir_builder->CreateLoad(
+                    llvm_visitor->array_descriptor_addr_dim_stride(
+                        descr_address, i));
+                offset = llvm_visitor->ir_builder->CreateMul(offset, val_stride);
+            }
+            offset_list.push_back(offset);
+
             llvm::Value *val_lower = llvm_visitor->ir_builder->CreateLoad(
                 llvm_visitor->array_descriptor_addr_dim_lower_bound(
                     descr_address, i));
@@ -969,16 +983,6 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 llvm_visitor->ir_builder->CreateSub(val_upper, val_lower),
                 llvm_visitor->get_integer_value_64(1));
             size_list.push_back(val_size);
-
-            llvm::Value *offset = indexes[i];
-            if (!unit_stride)
-            {
-                llvm::Value* val_stride = llvm_visitor->ir_builder->CreateLoad(
-                    llvm_visitor->array_descriptor_addr_dim_stride(
-                        descr_address, i));
-                offset = llvm_visitor->ir_builder->CreateMul(offset, val_stride);
-            }
-            offset_list.push_back(offset);
 
             t = t.array_element();
         }
@@ -1145,7 +1149,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                           Creator create_store)
     {
         LoopInfoOp loop_info_op;
-        create_loop_header_for_array_op(rhs_type, rhs_addr, loop_info_op);
+        create_loop_header_for_array_op(rhs, rhs_type, rhs_addr, loop_info_op);
 
         // Loop body
         std::vector<llvm::Value*> idx_val = derref_indexes(loop_info_op.idx_var);
@@ -1563,7 +1567,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         // TODO: Select easiest of the two to compute
         // FIXME: What if sizes differ?
         llvm::Value *array_size
-            = llvm_visitor->eval_elements_of_array(lhs_type, lhs_addr);
+            = llvm_visitor->eval_elements_of_array(lhs, lhs_type, lhs_addr);
 
         // Allocate space for the result
         llvm::Value *result_addr = llvm_visitor->ir_builder->CreateAlloca(
@@ -1576,7 +1580,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             llvm_visitor->get_integer_value_64(0), result_idx_addr);
 
         LoopInfoOp loop_info_op;
-        create_loop_header_for_array_op(rhs_type, rhs_addr, loop_info_op);
+        create_loop_header_for_array_op(rhs, rhs_type, rhs_addr, loop_info_op);
         std::vector<llvm::Value*> idx_val = derref_indexes(loop_info_op.idx_var);
         llvm::Value *lhs_addr_element = address_array_ith_element(lhs, lhs_type, lhs_addr, idx_val);
         llvm::Value *rhs_addr_element = address_array_ith_element(rhs, rhs_type, rhs_addr, idx_val);
@@ -3565,7 +3569,14 @@ llvm::Value *FortranLLVM::array_descriptor_addr_dtype(
                          { "dtype" });
 }
 
-llvm::Value* FortranLLVM::eval_elements_of_dimension(TL::Type t, llvm::Value *addr, int dimension)
+bool FortranLLVM::array_expression_will_use_unit_stride(Nodecl::NodeclBase expr)
+{
+    return expr.no_conv().is<Nodecl::Symbol>()
+           && expr.no_conv().get_type().no_ref().is_fortran_array();
+}
+
+
+llvm::Value* FortranLLVM::eval_elements_of_dimension(Nodecl::NodeclBase expr, TL::Type t, llvm::Value *addr, int dimension)
 {
     ERROR_CONDITION(!t.is_fortran_array(), "Invalid type", 0);
 
@@ -3575,12 +3586,15 @@ llvm::Value* FortranLLVM::eval_elements_of_dimension(TL::Type t, llvm::Value *ad
 
     if (t.array_requires_descriptor())
     {
+        if (!expr.is_null() && array_expression_will_use_unit_stride(expr))
+            vstride = get_integer_value_64(1);
+        else
+            vstride = ir_builder->CreateLoad(
+                array_descriptor_addr_dim_stride(addr, dimension));
         vlower = ir_builder->CreateLoad(
             array_descriptor_addr_dim_lower_bound(addr, dimension));
         vupper = ir_builder->CreateLoad(
             array_descriptor_addr_dim_upper_bound(addr, dimension));
-        vstride = ir_builder->CreateLoad(
-            array_descriptor_addr_dim_stride(addr, dimension));
     }
     else if (t.array_is_region())
     {
@@ -3617,14 +3631,14 @@ llvm::Value* FortranLLVM::eval_elements_of_dimension(TL::Type t, llvm::Value *ad
     return current_size;
 }
 
-llvm::Value* FortranLLVM::eval_elements_of_array(TL::Type t, llvm::Value *addr)
+llvm::Value* FortranLLVM::eval_elements_of_array(Nodecl::NodeclBase expr, TL::Type t, llvm::Value *addr)
 {
     ERROR_CONDITION(!t.is_fortran_array(), "Invalid type", 0);
     llvm::Value *val_size = nullptr;
     int dimension = 0;
     while (t.is_fortran_array())
     {
-        llvm::Value *current_size = eval_elements_of_dimension(t, addr, dimension);
+        llvm::Value *current_size = eval_elements_of_dimension(expr, t, addr, dimension);
 
         if (val_size == nullptr)
             val_size = current_size;

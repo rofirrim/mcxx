@@ -31,7 +31,6 @@
 
 #include "codegen-fortran.hpp"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/Module.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/MDBuilder.h"
@@ -372,10 +371,13 @@ namespace Codegen
         void emit_variable(TL::Symbol sym);
 
         // Takes into account region arrays
-        llvm::Value *eval_elements_of_dimension(TL::Type t,
+        llvm::Value *eval_elements_of_dimension(Nodecl::NodeclBase expr,
+                                                TL::Type t,
                                                 llvm::Value *addr,
                                                 int dimension);
-        llvm::Value *eval_elements_of_array(TL::Type t, llvm::Value *addr);
+        llvm::Value *eval_elements_of_array(Nodecl::NodeclBase expr,
+                                            TL::Type t,
+                                            llvm::Value *addr);
 
         // Only considers array types
         llvm::Value* eval_size_of_dimension(TL::Type t);
@@ -419,6 +421,8 @@ namespace Codegen
             llvm::Value *descriptor_addr, int dimension);
         llvm::Value *array_descriptor_addr_dim_stride(
             llvm::Value *descriptor_addr, int dimension);
+
+        bool array_expression_will_use_unit_stride(Nodecl::NodeclBase expr);
 
         void emit_main(llvm::Function *fortran_program);
 
