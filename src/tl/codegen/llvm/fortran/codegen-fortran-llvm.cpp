@@ -941,10 +941,14 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
     // FIXME: Integrate with address_array_ith_element_via_pointer_arithmetic
     llvm::Value *address_array_ith_element_via_descriptor(
+        const Nodecl::NodeclBase &array,
         TL::Type t,
         llvm::Value *descr_address,
         const std::vector<llvm::Value *> indexes)
     {
+        bool unit_stride = array.no_conv().is<Nodecl::Symbol>()
+            && array.no_conv().get_type().no_ref().is_fortran_array();
+
         int rank = t.fortran_rank();
 
         // Horner
@@ -960,17 +964,20 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             llvm::Value *val_upper = llvm_visitor->ir_builder->CreateLoad(
                 llvm_visitor->array_descriptor_addr_dim_upper_bound(
                     descr_address, i));
-            llvm::Value *val_stride = llvm_visitor->ir_builder->CreateLoad(
-                llvm_visitor->array_descriptor_addr_dim_stride(descr_address,
-                                                               i));
 
             llvm::Value *val_size = llvm_visitor->ir_builder->CreateAdd(
                 llvm_visitor->ir_builder->CreateSub(val_upper, val_lower),
                 llvm_visitor->get_integer_value_64(1));
             size_list.push_back(val_size);
 
-            llvm::Value *offset
-                = llvm_visitor->ir_builder->CreateMul(indexes[i], val_stride);
+            llvm::Value *offset = indexes[i];
+            if (!unit_stride)
+            {
+                llvm::Value* val_stride = llvm_visitor->ir_builder->CreateLoad(
+                    llvm_visitor->array_descriptor_addr_dim_stride(
+                        descr_address, i));
+                offset = llvm_visitor->ir_builder->CreateMul(offset, val_stride);
+            }
             offset_list.push_back(offset);
 
             t = t.array_element();
@@ -1095,7 +1102,9 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 base_address, { val_addr } );
     }
 
-    llvm::Value *address_array_ith_element(TL::Type t,
+    llvm::Value *address_array_ith_element(
+            const Nodecl::NodeclBase &array,
+            TL::Type t,
             llvm::Value *base_address,
             const std::vector<llvm::Value *> indexes)
     {
@@ -1110,7 +1119,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                         0);
 
         if (t.array_requires_descriptor())
-            return address_array_ith_element_via_descriptor(t, base_address, indexes);
+            return address_array_ith_element_via_descriptor(array, t, base_address, indexes);
         else
             return address_array_ith_element_via_pointer_arithmetic(t, base_address, indexes);
     }
@@ -1140,8 +1149,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
         // Loop body
         std::vector<llvm::Value*> idx_val = derref_indexes(loop_info_op.idx_var);
-        llvm::Value *lhs_addr_element = address_array_ith_element(lhs_type, lhs_addr, idx_val);
-        llvm::Value *rhs_addr_element = address_array_ith_element(rhs_type, rhs_addr, idx_val);
+        llvm::Value *lhs_addr_element = address_array_ith_element(lhs, lhs_type, lhs_addr, idx_val);
+        llvm::Value *rhs_addr_element = address_array_ith_element(rhs, rhs_type, rhs_addr, idx_val);
         create_store(llvm_visitor->ir_builder->CreateLoad(rhs_addr_element),
                      lhs_addr_element);
         create_loop_footer_for_array_op(rhs_type, loop_info_op);
@@ -1569,8 +1578,8 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         LoopInfoOp loop_info_op;
         create_loop_header_for_array_op(rhs_type, rhs_addr, loop_info_op);
         std::vector<llvm::Value*> idx_val = derref_indexes(loop_info_op.idx_var);
-        llvm::Value *lhs_addr_element = address_array_ith_element(lhs_type, lhs_addr, idx_val);
-        llvm::Value *rhs_addr_element = address_array_ith_element(rhs_type, rhs_addr, idx_val);
+        llvm::Value *lhs_addr_element = address_array_ith_element(lhs, lhs_type, lhs_addr, idx_val);
+        llvm::Value *rhs_addr_element = address_array_ith_element(rhs, rhs_type, rhs_addr, idx_val);
         llvm::Value *val_op
             = create(lhs,
                      rhs,
