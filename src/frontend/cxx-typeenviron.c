@@ -1791,6 +1791,7 @@ void init_type_environments(void)
     // ***************************+***************
     linux_ia32.environ_id = "linux-i386";
     linux_ia32.environ_name = "Linux IA32";
+    linux_ia32.triplet = "i686-pc-linux-gnu";
 
     linux_ia32.endianness = ENV_LITTLE_ENDIAN;
 
@@ -1861,6 +1862,7 @@ void init_type_environments(void)
     // ***************************+***************
     linux_amd64.environ_id = "linux-x86_64";
     linux_amd64.environ_name = "Linux AMD64/EMT64";
+    linux_amd64.triplet = "x86_64-unknown-linux-gnu";
 
     linux_amd64.endianness = ENV_LITTLE_ENDIAN;
 
@@ -1939,6 +1941,7 @@ void init_type_environments(void)
     // ***************************+***************
     linux_ia64.environ_id = "linux-ia64";
     linux_ia64.environ_name = "Linux Itanium";
+    linux_ia64.triplet = "ia64-unknown-linux-gnu";
 
     linux_ia64.endianness = ENV_LITTLE_ENDIAN;
 
@@ -2009,8 +2012,9 @@ void init_type_environments(void)
     // ***************************+***************
     linux_ppc32.environ_id = "linux-ppc32";
     linux_ppc32.environ_name = "Linux PowerPC 32 (ELFv1 Big Endian)";
+    linux_ppc32.triplet = "powerpc-unknown-linux-gnu";
 
-    linux_ia64.endianness = ENV_BIG_ENDIAN;
+    linux_ppc32.endianness = ENV_BIG_ENDIAN;
 
     // '_Bool' in C99
     // 'bool' in C++
@@ -2081,6 +2085,7 @@ void init_type_environments(void)
     // ***************************+***************
     linux_ppc64.environ_id = "linux-ppc64";
     linux_ppc64.environ_name = "Linux PowerPC 64 (ELFv1 Big Endian)";
+    linux_ppc64.triplet = "powerpc64-unknown-linux-gnu";
 
     linux_ppc64.endianness = ENV_BIG_ENDIAN;
 
@@ -2155,6 +2160,7 @@ void init_type_environments(void)
     linux_bgq_ppc64 = linux_ppc64;
     linux_bgq_ppc64.environ_id = "linux-bgq-ppc64";
     linux_bgq_ppc64.environ_name = "BlueGene/Q PowerPC 64 (ELFv1 Big Endian)";
+    linux_bgq_ppc64.triplet = "(unknown)"; // FIXME
     linux_bgq_ppc64.builtin_va_list_type = bgq_get_pointer_to_char;
 
     // ***************************+***************
@@ -2162,6 +2168,7 @@ void init_type_environments(void)
     // ***************************+***************
     linux_ppc64_le.environ_id = "linux-ppc64-le";
     linux_ppc64_le.environ_name = "Linux PowerPC 64 (ELFv2 Little Endian)";
+    linux_ppc64_le.triplet = "powerpc64le-unknown-linux-gnu";
 
     linux_ppc64_le.endianness = ENV_LITTLE_ENDIAN;
 
@@ -2235,6 +2242,7 @@ void init_type_environments(void)
     // ***************************+***************
     linux_spu.environ_id = "linux-spu";
     linux_spu.environ_name = "Linux SPU";
+    linux_spu.triplet = "spu-unknown-elf";
 
     linux_spu.endianness = ENV_BIG_ENDIAN;
 
@@ -2303,6 +2311,7 @@ void init_type_environments(void)
     // ***************************+***************
     solaris_sparcv9.environ_id = "solaris-sparcv9";
     solaris_sparcv9.environ_name = "Solaris SPARCv9";
+    solaris_sparcv9.triplet = "sparcv9-unknown-solaris2";
 
     solaris_sparcv9.endianness = ENV_BIG_ENDIAN;
 
@@ -2379,6 +2388,7 @@ void init_type_environments(void)
     // ***************************+***************
     linux_arm_eabi.environ_id = "linux-arm";
     linux_arm_eabi.environ_name = "Linux ARM (GNUEABI)";
+    linux_arm_eabi.triplet = "arm-unknown-linux-gnueabihf";
 
     linux_arm_eabi.endianness = ENV_LITTLE_ENDIAN;
 
@@ -2457,6 +2467,7 @@ void init_type_environments(void)
     // ***************************+***************
     linux_arm64.environ_id = "linux-arm64";
     linux_arm64.environ_name = "Linux ARM 64";
+    linux_arm64.triplet = "aarch64-unknown-linux-gnu";
 
     linux_arm64.endianness = ENV_LITTLE_ENDIAN;
 

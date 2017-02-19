@@ -114,7 +114,8 @@ void FortranLLVM::visit(const Nodecl::TopLevel &node)
                               llvm::DEBUG_METADATA_VERSION);
     current_module->addModuleFlag(llvm::Module::Warning, "Dwarf Version", 4);
 
-    std::string default_triple = llvm::sys::getDefaultTargetTriple();
+    ERROR_CONDITION(CURRENT_CONFIGURATION->type_environment->triplet == NULL, "Invalid triple", 0);
+    std::string default_triple = CURRENT_CONFIGURATION->type_environment->triplet;
     std::string error_message;
     const llvm::Target *target = llvm::TargetRegistry::lookupTarget(default_triple, error_message);
     if (target == NULL)

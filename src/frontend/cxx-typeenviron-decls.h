@@ -83,6 +83,9 @@ struct type_environment_tag
     // A more descriptive name
     const char* environ_name;
 
+    // Triplet. Used in GNU-compatible toolchains
+    const char* triplet;
+
     // Endianness
     endianness_t endianness;
 
