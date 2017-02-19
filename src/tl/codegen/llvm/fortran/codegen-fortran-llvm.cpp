@@ -2874,15 +2874,67 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 varg = llvm_visitor->eval_expression(arg);
                 if (it_param->no_ref().is_fortran_array())
                 {
-                    TL::Type array_type = it_param->no_ref();
-                    TL::Type element_type = array_type.array_base_element();
+                    if (!arg.get_type().no_ref().is_fortran_array()
+                        || (!it_param->no_ref().array_requires_descriptor()
+                            && !arg.get_type()
+                                    .no_ref()
+                                    .array_requires_descriptor()))
+                    {
+                        TL::Type array_type = it_param->no_ref();
+                        TL::Type element_type = array_type.array_base_element();
 
-                    // Cast to a pointer of the element
-                    varg = llvm_visitor->ir_builder->CreateBitCast(
-                        varg,
-                        llvm::PointerType::get(
-                            llvm_visitor->get_llvm_type(element_type),
-                            /* AddressSpace */ 0));
+                        // Cast to a pointer of the element
+                        varg = llvm_visitor->ir_builder->CreateBitCast(
+                            varg,
+                            llvm::PointerType::get(
+                                llvm_visitor->get_llvm_type(element_type),
+                                /* AddressSpace */ 0));
+                    }
+                    else if (!arg.get_type()
+                                  .no_ref()
+                                  .array_requires_descriptor()
+                             && it_param->no_ref().array_requires_descriptor())
+                    {
+                        // We need to create a descriptor here
+                        llvm::Type *descriptor_type
+                            = llvm_visitor->get_gfortran_array_descriptor_type(
+                                arg.get_type().no_ref());
+                        llvm::Value *descriptor_addr
+                            = llvm_visitor->ir_builder->CreateAlloca(
+                                descriptor_type, nullptr);
+
+                        llvm::Value *base_address
+                            = llvm_visitor->ir_builder->CreatePointerCast(
+                                varg, llvm_visitor->llvm_types.ptr_i8);
+
+                        llvm_visitor->fill_descriptor_info(
+                            arg.get_type().no_ref(),
+                            descriptor_addr,
+                            base_address);
+
+                        varg = descriptor_addr;
+                    }
+                    else if (arg.get_type()
+                                  .no_ref()
+                                  .array_requires_descriptor()
+                             && !it_param->no_ref().array_requires_descriptor())
+                    {
+                        // If the array is CONTIGUOUS we can use the buffer
+                        // directly, otherwise we will need to create a
+                        // temporary
+                        internal_error("Not yet implemented", 0);
+                    }
+                    else if (arg.get_type()
+                                  .no_ref()
+                                  .array_requires_descriptor()
+                             && it_param->no_ref().array_requires_descriptor())
+                    {
+                        // Nothing special is required, we already have a proper descriptor
+                    }
+                    else
+                    {
+                        internal_error("Code unreachable", 0);
+                    }
                 }
             }
 
