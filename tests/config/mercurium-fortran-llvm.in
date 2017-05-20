@@ -24,6 +24,7 @@ fi
 
 source @abs_top_builddir@/tests/config/mercurium-libraries
 cat <<EOF
+compile_versions="O0 O1 O2 O3"
 MCXX="@abs_top_builddir@/src/driver/plaincxx --output-dir=@abs_top_builddir@/tests --config-dir=@abs_top_builddir@/config --verbose"
 test_CC=""
 test_CXX=""
@@ -58,3 +59,10 @@ test_FFLAGS="--typecheck --fpc=@abs_top_builddir@/src/driver/fortran/.libs/mf03-
 EOF
 
 fi
+
+cat <<EOF
+test_FFLAGS_O0="-O0"
+test_FFLAGS_O1="-O1"
+test_FFLAGS_O2="-O2"
+test_FFLAGS_O3="-O3"
+EOF
