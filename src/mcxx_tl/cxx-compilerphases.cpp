@@ -653,7 +653,7 @@ extern "C"
 
     void compiler_special_phase_set_codegen(compilation_configuration_t* config, const char* data)
     {
-    	const char* lib_name = (const char*) data;
+        const char* lib_name = (const char*) data;
         TL::CompilerPhase* new_phase = load_compiler_phase_from_libname(config, lib_name);
 
         if (new_phase == NULL)
@@ -662,6 +662,19 @@ extern "C"
         }
 
         config->codegen_phase = new_phase;
+    }
+
+    void compiler_special_phase_set_source_codegen(compilation_configuration_t* config, const char* data)
+    {
+        const char* lib_name = (const char*) data;
+        TL::CompilerPhase* new_phase = load_compiler_phase_from_libname(config, lib_name);
+
+        if (new_phase == NULL)
+        {
+            fatal_error("Codegen phase '%s' could not be loaded. Aborting\n", data);
+        }
+
+        config->source_codegen_phase = new_phase;
     }
 
     void load_compiler_phases_cxx(compilation_configuration_t* config)
@@ -739,14 +752,14 @@ extern "C"
 
     const char* codegen_to_str(nodecl_t node, const decl_context_t* decl_context)
     {
-        ERROR_CONDITION(CURRENT_CONFIGURATION->codegen_phase == NULL,
+        ERROR_CONDITION(CURRENT_CONFIGURATION->source_codegen_phase == NULL,
                 "Codegen phase has not been loaded yet for this configuration", 0);
 
-        Codegen::CodegenPhase* codegen_phase = reinterpret_cast<Codegen::CodegenPhase*>(CURRENT_CONFIGURATION->codegen_phase);
+        Codegen::CodegenPhase* source_codegen_phase = reinterpret_cast<Codegen::CodegenPhase*>(CURRENT_CONFIGURATION->source_codegen_phase);
 
-        codegen_phase->push_scope(decl_context);
-        std::string str = codegen_phase->codegen_to_str(node, TL::Scope(decl_context));
-        codegen_phase->pop_scope();
+        source_codegen_phase->push_scope(decl_context);
+        std::string str = source_codegen_phase->codegen_to_str(node, TL::Scope(decl_context));
+        source_codegen_phase->pop_scope();
 
         return uniquestr(str.c_str());
     }

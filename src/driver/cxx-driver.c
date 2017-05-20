@@ -812,6 +812,10 @@ static void ensure_codegen_is_loaded(void)
             internal_error("This compiler is not configured for C/C++/Fortran so a suitable codegen cannot be loaded", 0);
         }
     }
+    if (CURRENT_CONFIGURATION->source_codegen_phase == NULL)
+    {
+        CURRENT_CONFIGURATION->source_codegen_phase = CURRENT_CONFIGURATION->codegen_phase;
+    }
 }
 
 static void help_message(void)

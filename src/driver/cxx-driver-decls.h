@@ -476,6 +476,11 @@ typedef struct compilation_configuration_tag
     // This is a void* because it points to a C++ class
     void* codegen_phase;
 
+    // Codegen phase for this profile, will be the same
+    // as codegen_phase when the compiler acts as source-to-source.
+    // This is a void* because it points to a C++ class
+    void* source_codegen_phase;
+
     // States whether the phases of this compiler were loaded
     char phases_loaded;
 

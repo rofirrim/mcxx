@@ -57,6 +57,7 @@ LIBMCXXTL_EXTERN void unload_compiler_phases(void);
 LIBMCXXTL_EXTERN void compiler_regular_phase_loader(compilation_configuration_t* config, const char* data);
 LIBMCXXTL_EXTERN void compiler_special_phase_set_dto(compilation_configuration_t* config, const char* data);
 LIBMCXXTL_EXTERN void compiler_special_phase_set_codegen(compilation_configuration_t* config, const char* data);
+LIBMCXXTL_EXTERN void compiler_special_phase_set_source_codegen(compilation_configuration_t* config, const char* data);
 
 LIBMCXXTL_EXTERN void run_codegen_phase(FILE *out_file,
         translation_unit_t* translation_unit,
