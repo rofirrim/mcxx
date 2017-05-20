@@ -3687,9 +3687,9 @@ void FortranLLVM::emit_variable(TL::Symbol sym)
     llvm::Value *allocation = ir_builder->CreateAlloca(llvm_type, array_size, sym.get_name());
     map_symbol_to_value(sym, allocation);
 
-    llvm::DINode::DIFlags flags = llvm::DINode::FlagZero;
-    if (sym.is_saved_expression())
-        flags |= llvm::DINode::FlagArtificial;
+    // We set FlagArtificial to avoid a bug in the verifier if DILocalVariable
+    llvm::DINode::DIFlags flags = llvm::DINode::FlagArtificial;
+
     llvm::DILocalVariable *dbg_var =
         dbg_builder->createAutoVariable(get_debug_scope(), sym.get_name(), dbg_info.file,
                 sym.get_line(), get_debug_info_type(sym.get_type()),
