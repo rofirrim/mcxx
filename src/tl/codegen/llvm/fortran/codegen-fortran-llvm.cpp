@@ -3618,7 +3618,7 @@ llvm::Value* FortranLLVM::eval_elements_of_dimension(Nodecl::NodeclBase expr, TL
         Nodecl::NodeclBase lower
             = array_type_get_array_lower_bound(t.get_internal_type());
         Nodecl::NodeclBase upper
-            = array_type_get_array_lower_bound(t.get_internal_type());
+            = array_type_get_array_upper_bound(t.get_internal_type());
 
         vlower = eval_expression(lower);
         vupper = eval_expression(upper);
