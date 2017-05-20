@@ -811,10 +811,24 @@ static void ensure_codegen_is_loaded(void)
         {
             internal_error("This compiler is not configured for C/C++/Fortran so a suitable codegen cannot be loaded", 0);
         }
+
+        CURRENT_CONFIGURATION->source_codegen_phase = CURRENT_CONFIGURATION->codegen_phase;
     }
     if (CURRENT_CONFIGURATION->source_codegen_phase == NULL)
     {
-        CURRENT_CONFIGURATION->source_codegen_phase = CURRENT_CONFIGURATION->codegen_phase;
+        if (IS_C_LANGUAGE
+                || IS_CXX_LANGUAGE)
+        {
+            compiler_special_phase_set_source_codegen(CURRENT_CONFIGURATION, "libcodegen-cxx.so");
+        }
+        else if (IS_FORTRAN_LANGUAGE)
+        {
+            compiler_special_phase_set_source_codegen(CURRENT_CONFIGURATION, "libcodegen-fortran.so");
+        }
+        else
+        {
+            internal_error("This compiler is not configured for C/C++/Fortran so a suitable codegen cannot be loaded", 0);
+        }
     }
 }
 
