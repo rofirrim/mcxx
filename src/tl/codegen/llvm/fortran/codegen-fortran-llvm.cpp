@@ -1328,22 +1328,28 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
     void visit(const Nodecl::Neg &node)
     {
-        FortranLLVM::TrackLocation loc(llvm_visitor, node);
-
         Nodecl::NodeclBase rhs = node.get_rhs();
-        llvm::Value *vrhs = llvm_visitor->eval_expression(rhs);
-
         // There is no neg instruction. So "neg x" is represented as "sub 0, x"
-        if (rhs.get_type().is_signed_integral())
+        TL::Type rhs_type = rhs.get_type().no_ref();
+        if (rhs_type.is_fortran_array())
+            rhs_type = rhs_type.fortran_array_base_element();
+        if (rhs_type.is_signed_integral())
         {
-            llvm::Value *z = llvm_visitor->get_integer_value(0, rhs.get_type());
-            value = llvm_visitor->ir_builder->CreateSub(z, vrhs);
+            unary_operator(
+                node, [&, this](Nodecl::NodeclBase, llvm::Value *vrhs) {
+                    llvm::Value *z
+                        = llvm_visitor->get_integer_value(0, rhs_type);
+                    return llvm_visitor->ir_builder->CreateSub(z, vrhs);
+                });
         }
-        else if (rhs.get_type().is_floating_type())
+        else if (rhs_type.is_floating_type())
         {
-            llvm::Value *z = llvm::ConstantFP::get(llvm_visitor->llvm_context,
-                                                   llvm::APFloat(0.0));
-            value = llvm_visitor->ir_builder->CreateFSub(z, vrhs);
+            unary_operator(
+                node, [&, this](Nodecl::NodeclBase, llvm::Value *vrhs) -> llvm::Value* {
+                    llvm::Value *z = llvm::ConstantFP::get(
+                        llvm_visitor->llvm_context, llvm::APFloat(0.0));
+                    return llvm_visitor->ir_builder->CreateFSub(z, vrhs);
+                });
         }
         else
         {
@@ -1352,6 +1358,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
                 ast_print_node_type(node.get_kind()),
                 print_declarator(rhs.get_type().get_internal_type()));
         }
+
     }
 
     void visit(const Nodecl::Plus &node)
@@ -1549,10 +1556,10 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
 
     template <typename Create>
-    void arithmetic_binary_operator_array(const Nodecl::NodeclBase &node,
-                                          const Nodecl::NodeclBase &lhs,
-                                          const Nodecl::NodeclBase &rhs,
-                                          Create create)
+    void binary_operator_array(const Nodecl::NodeclBase &node,
+                               const Nodecl::NodeclBase &lhs,
+                               const Nodecl::NodeclBase &rhs,
+                               Create create)
     {
         TL::Type node_type = node.get_type();
 
@@ -1643,7 +1650,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
         if (lhs_type.is_fortran_array() || rhs_type.is_fortran_array())
         {
-            return arithmetic_binary_operator_array(node, lhs, rhs, create);
+            return binary_operator_array(node, lhs, rhs, create);
         }
         else
         {
@@ -1652,6 +1659,93 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             llvm::Value *vrhs = llvm_visitor->eval_expression(rhs);
 
             value = binary_operator_scalar(lhs, rhs, vlhs, vrhs, create);
+        }
+    }
+
+    template <typename Create>
+    llvm::Value *unary_operator_scalar(
+        Nodecl::NodeclBase rhs,
+        llvm::Value *rhs_val,
+        Create create)
+    {
+        return create(rhs, rhs_val);
+    }
+
+    template <typename Create>
+    void unary_operator_array(const Nodecl::NodeclBase &node,
+                              const Nodecl::NodeclBase &rhs,
+                              Create create)
+    {
+        TL::Type node_type = node.get_type();
+
+        ERROR_CONDITION(
+            !node_type.is_fortran_array(), "The result must be an array!\n", 0);
+
+        TL::Type node_element_type = node_type.array_base_element();
+
+        llvm::Value *array_size
+            = llvm_visitor->eval_elements_of_array(node, node_type, /* addr */ nullptr);
+
+        // Allocate space for the result
+        llvm::Value *result_addr = llvm_visitor->ir_builder->CreateAlloca(
+                llvm_visitor->get_llvm_type(node_element_type), array_size);
+
+        // Index inside the contiguous result array. This is used for looping.
+        llvm::Value *result_idx_addr = llvm_visitor->ir_builder->CreateAlloca(
+            llvm_visitor->llvm_types.i64);
+        llvm_visitor->ir_builder->CreateStore(
+            llvm_visitor->get_integer_value_64(0), result_idx_addr);
+
+        LoopInfoOp loop_info_op;
+        create_loop_header_for_array_op(node, node_type, /* addr */ nullptr, loop_info_op);
+        std::vector<llvm::Value*> idx_val = derref_indexes(loop_info_op.idx_var);
+
+        TL::Type rhs_type = rhs.get_type();
+        llvm::Value *rhs_addr = llvm_visitor->eval_expression(rhs);
+        llvm::Value *rhs_addr_element
+            = address_array_ith_element(rhs, rhs_type, rhs_addr, idx_val);
+        llvm::Value *rhs_value
+            = llvm_visitor->ir_builder->CreateLoad(rhs_addr_element);
+
+        llvm::Value *val_op
+            = create(rhs,
+                     rhs_value);
+
+        // FIXME - CHARACTER assignment!
+        llvm_visitor->ir_builder->CreateStore(
+            val_op,
+            llvm_visitor->ir_builder->CreateGEP(
+                result_addr,
+                { llvm_visitor->ir_builder->CreateLoad(result_idx_addr) }));
+
+        llvm_visitor->ir_builder->CreateStore(
+            llvm_visitor->ir_builder->CreateAdd(llvm_visitor->ir_builder->CreateLoad(result_idx_addr),
+                                    llvm_visitor->get_integer_value_64(1)),
+            result_idx_addr);
+        create_loop_footer_for_array_op(node_type, loop_info_op);
+
+        // The result array is an address in LLVM world.
+        value = result_addr;
+    }
+
+    template <typename Node, typename Create>
+    void unary_operator(const Node node,
+            Create create)
+    {
+        FortranLLVM::TrackLocation loc(llvm_visitor, node);
+
+        Nodecl::NodeclBase rhs = node.get_rhs();
+        TL::Type rhs_type = rhs.get_type();
+
+        if (rhs_type.is_fortran_array())
+        {
+            return unary_operator_array(node, rhs, create);
+        }
+        else
+        {
+            // A scalar intrinsic binary operation
+            llvm::Value *vrhs = llvm_visitor->eval_expression(rhs);
+            value = unary_operator_scalar(rhs, vrhs, create);
         }
     }
 
@@ -1704,7 +1798,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     {
         t = t.no_ref();
         if (t.is_fortran_array())
-            t = t.array_base_element();
+            t = t.fortran_array_base_element();
         if (t.is_signed_integral())
             return create_integer;
         else if (t.is_floating_type())
@@ -1949,11 +2043,11 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     }
 
     template <typename Node, typename CreateSInt, typename CreateFloat, typename CreateComplex, typename CreateCharacter>
-    void arithmetic_binary_comparison(const Node node,
-                                      CreateSInt create_sint,
-                                      CreateFloat create_float,
-                                      CreateComplex create_complex,
-                                      CreateCharacter create_character)
+    void binary_comparison(const Node node,
+            CreateSInt create_sint,
+            CreateFloat create_float,
+            CreateComplex create_complex,
+            CreateCharacter create_character)
     {
         TL::Type lhs_type = node.get_lhs().get_type().no_ref();
         if (lhs_type.is_fortran_array())
@@ -2193,11 +2287,11 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     void visit(const Nodecl::LowerThan &node)
     {
         CharacterCompareLT character_compare_lt(llvm_visitor, node);
-        arithmetic_binary_comparison(node,
-                              CREATOR_CMP(CreateICmpSLT, node),
-                              CREATOR_CMP(CreateFCmpOLT, node),
-                              INVALID_OP,
-                              character_compare_lt);
+        binary_comparison(node,
+                CREATOR_CMP(CreateICmpSLT, node),
+                CREATOR_CMP(CreateFCmpOLT, node),
+                INVALID_OP,
+                character_compare_lt);
     }
 
     struct CharacterCompareLE
@@ -2410,11 +2504,11 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     void visit(const Nodecl::LowerOrEqualThan &node)
     {
         CharacterCompareLE character_compare_le(llvm_visitor, node);
-        arithmetic_binary_comparison(node,
-                              CREATOR_CMP(CreateICmpSLE, node),
-                              CREATOR_CMP(CreateFCmpOLE, node),
-                              INVALID_OP,
-                              character_compare_le);
+        binary_comparison(node,
+                CREATOR_CMP(CreateICmpSLE, node),
+                CREATOR_CMP(CreateFCmpOLE, node),
+                INVALID_OP,
+                character_compare_le);
     }
 
     void visit(const Nodecl::GreaterThan &node)
@@ -2426,11 +2520,11 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             // a > b computed as b < a
             return character_compare_lt(rhs, lhs, vrhs, vlhs);
         };
-        arithmetic_binary_comparison(node,
-                              CREATOR_CMP(CreateICmpSGT, node),
-                              CREATOR_CMP(CreateFCmpOGT, node),
-                              INVALID_OP,
-                              character_compare_gt);
+        binary_comparison(node,
+                CREATOR_CMP(CreateICmpSGT, node),
+                CREATOR_CMP(CreateFCmpOGT, node),
+                INVALID_OP,
+                character_compare_gt);
     }
 
     void visit(const Nodecl::GreaterOrEqualThan &node)
@@ -2442,11 +2536,11 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             // a >= b computed as b <= a
             return character_compare_le(rhs, lhs, vrhs, vlhs);
         };
-        arithmetic_binary_comparison(node,
-                              CREATOR_CMP(CreateICmpSGE, node),
-                              CREATOR_CMP(CreateFCmpOGE, node),
-                              INVALID_OP,
-                              character_compare_ge);
+        binary_comparison(node,
+                CREATOR_CMP(CreateICmpSGE, node),
+                CREATOR_CMP(CreateFCmpOGE, node),
+                INVALID_OP,
+                character_compare_ge);
     }
 
     struct CharacterCompareEQ
@@ -2660,11 +2754,11 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
 
         CharacterCompareEQ character_compare_eq(llvm_visitor, node);
 
-        arithmetic_binary_comparison(node,
-                              CREATOR_CMP(CreateICmpEQ, node),
-                              CREATOR_CMP(CreateFCmpOEQ, node),
-                              creator_complex,
-                              character_compare_eq);
+        binary_comparison(node,
+                CREATOR_CMP(CreateICmpEQ, node),
+                CREATOR_CMP(CreateFCmpOEQ, node),
+                creator_complex,
+                character_compare_eq);
     }
 
     void visit(const Nodecl::Different &node)
@@ -2707,11 +2801,11 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             return v;
         };
 
-        arithmetic_binary_comparison(node,
-                              CREATOR_CMP(CreateICmpNE, node),
-                              CREATOR_CMP(CreateFCmpONE, node),
-                              creator_complex,
-                              character_compare_ne);
+        binary_comparison(node,
+                CREATOR_CMP(CreateICmpNE, node),
+                CREATOR_CMP(CreateFCmpONE, node),
+                creator_complex,
+                character_compare_ne);
     }
 #undef CREATOR
 #undef UNIMPLEMENTED_OP
