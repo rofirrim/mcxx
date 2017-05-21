@@ -23,33 +23,11 @@
 --------------------------------------------------------------------*/
 
 #include "config.h"
+#include "codegen-fortran-llvm.hpp"
 #include "filename.h"
 #include "cxx-driver-build-info.h"
-#include "codegen-fortran-llvm.hpp"
-#include "tl-compilerphase.hpp"
-#include "fortran03-buildscope.h"
-#include "fortran03-scope.h"
-#include "fortran03-mangling.h"
-#include "fortran03-exprtype.h"
-#include "fortran03-typeutils.h"
-#include "fortran03-cexpr.h"
 #include "tl-compilerpipeline.hpp"
-#include "tl-source.hpp"
-#include "cxx-cexpr.h"
-#include "cxx-entrylist.h"
-#include "cxx-driver-utils.h"
-#include "cxx-diagnostic.h"
-#include "string_utils.h"
-#include <ctype.h>
-
-#include "cxx-lexer.h"
-#include "cxx-typeenviron.h"
-
 #include "llvm/Support/raw_os_ostream.h"
-#include "llvm/IR/Type.h"
-#include "llvm/IR/Value.h"
-#include "llvm/IR/Argument.h"
-#include "llvm/IR/Function.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
@@ -68,18 +46,11 @@ FortranLLVM::FortranLLVM()
 
 void FortranLLVM::codegen(const Nodecl::NodeclBase &n, std::ostream *out)
 {
-    if (!is_file_output())
-    {
-        // FIXME - Assert this case because this pass is not for printing source
-        // code.
-        // Let FortranBase handle this case
-        base.codegen(n, out);
-    }
-    else
-    {
-        file = out;
-        walk(n);
-    }
+    ERROR_CONDITION(
+        !is_file_output(), "This codegen is only for file output", 0);
+
+    file = out;
+    walk(n);
 }
 
 void FortranLLVM::codegen_cleanup()
