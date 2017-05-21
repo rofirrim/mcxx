@@ -2843,8 +2843,17 @@ src_tl_codegen_llvm_fortran_libcodegen_fortran_llvm_la_LIBADD = \
 							   $(END)
 
 src_tl_codegen_llvm_fortran_libcodegen_fortran_llvm_la_SOURCES = \
-	 src/tl/codegen/llvm/fortran/codegen-fortran-llvm.hpp \
-	 src/tl/codegen/llvm/fortran/codegen-fortran-llvm.cpp \
+     src/tl/codegen/llvm/fortran/codegen-fortran-llvm-array-desc.cpp \
+     src/tl/codegen/llvm/fortran/codegen-fortran-llvm-builtins.cpp \
+     src/tl/codegen/llvm/fortran/codegen-fortran-llvm-const.cpp \
+     src/tl/codegen/llvm/fortran/codegen-fortran-llvm.cpp \
+     src/tl/codegen/llvm/fortran/codegen-fortran-llvm-expr.cpp \
+     src/tl/codegen/llvm/fortran/codegen-fortran-llvm-expr.hpp \
+     src/tl/codegen/llvm/fortran/codegen-fortran-llvm-function.cpp \
+     src/tl/codegen/llvm/fortran/codegen-fortran-llvm-gfortran.cpp \
+     src/tl/codegen/llvm/fortran/codegen-fortran-llvm.hpp \
+     src/tl/codegen/llvm/fortran/codegen-fortran-llvm-stmt.cpp \
+     src/tl/codegen/llvm/fortran/codegen-fortran-llvm-type.cpp \
   	 $(END)
 
 endif

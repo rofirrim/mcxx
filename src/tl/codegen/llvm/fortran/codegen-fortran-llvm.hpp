@@ -1,5 +1,5 @@
 /*--------------------------------------------------------------------
-  (C) Copyright 2006-2015 Barcelona Supercomputing Center
+  (C) Copyright 2016-2017 Barcelona Supercomputing Center
                           Centro Nacional de Supercomputacion
   
   This file is part of Mercurium C/C++ source-to-source compiler.
@@ -23,6 +23,7 @@
   not, write to the Free Software Foundation, Inc., 675 Mass Ave,
   Cambridge, MA 02139, USA.
 --------------------------------------------------------------------*/
+
 
 #ifndef CODEGEN_FORTRAN_LLVM_HPP
 #define CODEGEN_FORTRAN_LLVM_HPP
@@ -77,8 +78,12 @@ namespace Codegen
         }
 
         void visit(const Nodecl::TopLevel &node);
+
+        // Function
         void visit(const Nodecl::FunctionCode &node);
         void visit(const Nodecl::Context &node);
+
+        // Statements
         void visit(const Nodecl::CompoundStatement &node);
         void visit(const Nodecl::ExpressionStatement &node);
         void visit(const Nodecl::EmptyStatement &node);
