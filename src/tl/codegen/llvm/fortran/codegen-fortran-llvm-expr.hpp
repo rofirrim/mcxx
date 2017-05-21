@@ -287,24 +287,11 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     void visit(const Nodecl::FunctionCall &node);
 
   private:
-    typedef void (FortranVisitorLLVMExpression::*BuiltinImplFunc)(
-        const Nodecl::FunctionCall &node);
-
-    struct BuiltinImpl
-    {
-        BuiltinImplFunc func = nullptr;
-        bool use_constant = false;
-    };
-
-    // The definition is in codegen-fortran-llvm-builtin.cpp
-    static std::map<std::string, BuiltinImpl> builtin_impl;
 
     void implement_builtin_call(const Nodecl::FunctionCall &node);
+    friend class FortranBuiltins;
 
     // FIXME: Move these to another class
-    void builtin_xbound(const Nodecl::FunctionCall &node, bool is_lbound);
-    void builtin_lbound(const Nodecl::FunctionCall &node);
-    void builtin_ubound(const Nodecl::FunctionCall &node);
 };
 }
 

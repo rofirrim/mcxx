@@ -31,32 +31,35 @@
 namespace Codegen
 {
 
-void FortranVisitorLLVMExpression::implement_builtin_call(
-    const Nodecl::FunctionCall &node)
+class FortranBuiltins
 {
-    Nodecl::NodeclBase called = node.get_called();
-    Nodecl::List arguments = node.get_arguments().as<Nodecl::List>();
+  private:
+    FortranVisitorLLVMExpression *v;
 
-    ERROR_CONDITION(
-        !called.is<Nodecl::Symbol>(), "We can only call functions", 0);
-    TL::Symbol called_sym = called.get_symbol();
+    llvm::Value* builtin_xbound(const Nodecl::FunctionCall &node, bool is_lbound);
 
-    BuiltinImpl &impl = builtin_impl[called_sym.get_name()];
-    if (impl.use_constant && node.is_constant())
+  public:
+    FortranBuiltins(FortranVisitorLLVMExpression *v) : v(v)
     {
-        value = llvm_visitor->eval_constant(node.get_constant());
-        return;
-    }
-    if (impl.func == nullptr)
-    {
-        internal_error("No implementation for builtin '%s'\n",
-                       called_sym.get_name().c_str());
     }
 
-    return (this->*(impl.func))(node);
-}
+    llvm::Value* builtin_lbound(const Nodecl::FunctionCall &node);
+    llvm::Value* builtin_ubound(const Nodecl::FunctionCall &node);
 
-void FortranVisitorLLVMExpression::builtin_xbound(
+    typedef llvm::Value* (FortranBuiltins::*BuiltinImplFunc)(
+        const Nodecl::FunctionCall &node);
+
+    struct BuiltinImpl
+    {
+        BuiltinImplFunc func = nullptr;
+        bool use_constant = false;
+    };
+
+    // The definition is in codegen-fortran-llvm-builtin.cpp
+    static std::map<std::string, BuiltinImpl> builtin_impl;
+};
+
+llvm::Value* FortranBuiltins::builtin_xbound(
     const Nodecl::FunctionCall &node, bool is_lbound)
 {
     Nodecl::List args = node.get_arguments().as<Nodecl::List>();
@@ -74,18 +77,20 @@ void FortranVisitorLLVMExpression::builtin_xbound(
                     "Invalid dimension %d > %d",
                     dim_val,
                     t.fortran_rank());
+
+    llvm::Value *value = nullptr;
     if (t.array_requires_descriptor())
     {
-        llvm::Value *descriptor_addr = llvm_visitor->eval_expression(array);
+        llvm::Value *descriptor_addr = v->llvm_visitor->eval_expression(array);
 
         llvm::Value *xbound_field
             = is_lbound ?
-                  llvm_visitor->array_descriptor_addr_dim_lower_bound(
+                  v->llvm_visitor->array_descriptor_addr_dim_lower_bound(
                       descriptor_addr, dim_val - 1) :
-                  llvm_visitor->array_descriptor_addr_dim_upper_bound(
+                  v->llvm_visitor->array_descriptor_addr_dim_upper_bound(
                       descriptor_addr, dim_val - 1);
 
-        value = llvm_visitor->ir_builder->CreateLoad(xbound_field);
+        value = v->llvm_visitor->ir_builder->CreateLoad(xbound_field);
     }
     else
     {
@@ -100,27 +105,57 @@ void FortranVisitorLLVMExpression::builtin_xbound(
 
         Nodecl::NodeclBase xbound = is_lbound ? lower : upper;
 
-        value = llvm_visitor->eval_expression(xbound);
+        value = v->llvm_visitor->eval_expression(xbound);
     }
 
-    value = llvm_visitor->ir_builder->CreateZExtOrTrunc(
-        value, llvm_visitor->get_llvm_type(node.get_type()));
+    value = v->llvm_visitor->ir_builder->CreateZExtOrTrunc(
+        value, v->llvm_visitor->get_llvm_type(node.get_type()));
+
+    return value;
 }
 
-void FortranVisitorLLVMExpression::builtin_lbound(
+llvm::Value* FortranBuiltins::builtin_lbound(
     const Nodecl::FunctionCall &node)
 {
     return builtin_xbound(node, /* is_lbound */ true);
 }
 
-void FortranVisitorLLVMExpression::builtin_ubound(
+llvm::Value* FortranBuiltins::builtin_ubound(
     const Nodecl::FunctionCall &node)
 {
     return builtin_xbound(node, /* is_lbound */ false);
 }
 
-std::map<std::string, FortranVisitorLLVMExpression::BuiltinImpl>
-    FortranVisitorLLVMExpression::builtin_impl
-    = { { "lbound", { &FortranVisitorLLVMExpression::builtin_lbound, true } },
-        { "ubound", { &FortranVisitorLLVMExpression::builtin_ubound, true } } };
+std::map<std::string, FortranBuiltins::BuiltinImpl>
+    FortranBuiltins::builtin_impl
+    = { { "lbound", { &FortranBuiltins::builtin_lbound, true } },
+        { "ubound", { &FortranBuiltins::builtin_ubound, true } } };
+
+void FortranVisitorLLVMExpression::implement_builtin_call(
+    const Nodecl::FunctionCall &node)
+{
+    FortranBuiltins builtins(this);
+    Nodecl::NodeclBase called = node.get_called();
+    Nodecl::List arguments = node.get_arguments().as<Nodecl::List>();
+
+    ERROR_CONDITION(
+        !called.is<Nodecl::Symbol>(), "We can only call functions", 0);
+    TL::Symbol called_sym = called.get_symbol();
+
+    FortranBuiltins::BuiltinImpl &impl = FortranBuiltins::builtin_impl[called_sym.get_name()];
+    if (impl.use_constant && node.is_constant())
+    {
+        value = llvm_visitor->eval_constant(node.get_constant());
+        return;
+    }
+    if (impl.func == nullptr)
+    {
+        internal_error("No implementation for builtin '%s'\n",
+                       called_sym.get_name().c_str());
+    }
+
+    value = (builtins.*(impl.func))(node);
+}
+
+
 }

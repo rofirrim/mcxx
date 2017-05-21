@@ -31,6 +31,75 @@
 namespace Codegen
 {
 
+void FortranLLVM::emit_variable(TL::Symbol sym)
+{
+    ERROR_CONDITION(!sym.is_variable(),
+                    "Invalid symbol kind '%s'\n",
+                    symbol_kind_name(sym.get_internal_symbol()));
+    if (get_value(sym) != NULL)
+        return;
+
+    llvm::Value *array_size = nullptr;
+    if (sym.get_type().is_fortran_array()
+        && !sym.get_type().array_requires_descriptor())
+    {
+        // Emit size
+        TrackLocation loc(this, sym.get_locus());
+
+        TL::Type t = sym.get_type();
+        array_size = eval_size_of_array(t);
+    }
+
+    llvm::Type *llvm_type = get_llvm_type(sym.get_type());
+    llvm::Value *allocation
+        = ir_builder->CreateAlloca(llvm_type, array_size, sym.get_name());
+    map_symbol_to_value(sym, allocation);
+
+    // We set FlagArtificial to avoid a bug in the verifier if DILocalVariable
+    llvm::DINode::DIFlags flags = llvm::DINode::FlagArtificial;
+
+    llvm::DILocalVariable *dbg_var
+        = dbg_builder->createAutoVariable(get_debug_scope(),
+                                          sym.get_name(),
+                                          dbg_info.file,
+                                          sym.get_line(),
+                                          get_debug_info_type(sym.get_type()),
+                                          /* AlwaysPreserve */ false,
+                                          flags);
+
+    std::vector<int64_t> dbg_expr_ops;
+    llvm::DIExpression *dbg_expr = dbg_builder->createExpression(dbg_expr_ops);
+
+    dbg_builder->insertDeclare(
+        allocation,
+        dbg_var,
+        dbg_expr,
+        llvm::DILocation::get(
+            llvm_context, sym.get_line(), sym.get_column(), get_debug_scope()),
+        ir_builder->GetInsertBlock());
+
+    // If this variable is ALLOCATABLE or a POINTER it must be set to zero
+    if (sym.is_allocatable() || sym.get_type().is_pointer())
+    {
+        if ((sym.get_type().is_array()
+             && sym.get_type().array_requires_descriptor())
+            || (sym.get_type().is_pointer()
+                && sym.get_type().points_to().is_array()))
+        {
+            FortranLLVM::TrackLocation loc(this, sym.get_locus());
+            // This has created a descriptor. Set it to zero.
+            // FIXME - I think there is a zeroinitializer for these cases.
+            ir_builder->CreateStore(
+                llvm::ConstantPointerNull::get(llvm_types.ptr_i8),
+                array_descriptor_addr_base_addr(allocation));
+        }
+        else
+        {
+            internal_error("Not implemented yet", 0);
+        }
+    }
+}
+
 // This strategy is not very efficient when there are many nested scopes as
 // several subtrees will be traversed many times but it makes the
 // implementation much cleaner and Fortran rarely has more than one lexical

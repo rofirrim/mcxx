@@ -433,6 +433,7 @@ namespace Codegen
 
         friend class FortranVisitorLLVMEmitVariables;
         friend class FortranVisitorLLVMExpression;
+        friend class FortranBuiltins;
     };
 }
 

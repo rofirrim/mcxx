@@ -29,6 +29,18 @@
 
 namespace Codegen { 
 
+void FortranLLVM::gfortran_runtime_error(const locus_t *locus,
+                                         const std::string &str)
+{
+    std::stringstream ss;
+    ss << "At " << locus_to_str(locus);
+
+    ir_builder->CreateCall(gfortran_rt.runtime_error_at.get(),
+                           { ir_builder->CreateGlobalStringPtr(ss.str()),
+                             ir_builder->CreateGlobalStringPtr("%s"),
+                             ir_builder->CreateGlobalStringPtr(str) });
+}
+
 // Based on ioparm.def from gfortran
 #define IOPARM_LIST_FIELDS \
  IOPARM_START(common) \
