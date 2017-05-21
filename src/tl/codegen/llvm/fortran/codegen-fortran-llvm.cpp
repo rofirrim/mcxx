@@ -1329,14 +1329,15 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     void visit(const Nodecl::Neg &node)
     {
         Nodecl::NodeclBase rhs = node.get_rhs();
-        // There is no neg instruction. So "neg x" is represented as "sub 0, x"
         TL::Type rhs_type = rhs.get_type().no_ref();
         if (rhs_type.is_fortran_array())
             rhs_type = rhs_type.fortran_array_base_element();
+
+        // There is no neg instruction. So "neg x" is represented as "sub 0, x"
         if (rhs_type.is_signed_integral())
         {
             unary_operator(
-                node, [&, this](Nodecl::NodeclBase, llvm::Value *vrhs) {
+                node, [&, this](const Nodecl::NodeclBase&, llvm::Value *vrhs) {
                     llvm::Value *z
                         = llvm_visitor->get_integer_value(0, rhs_type);
                     return llvm_visitor->ir_builder->CreateSub(z, vrhs);
@@ -1345,7 +1346,7 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
         else if (rhs_type.is_floating_type())
         {
             unary_operator(
-                node, [&, this](Nodecl::NodeclBase, llvm::Value *vrhs) -> llvm::Value* {
+                node, [&, this](const Nodecl::NodeclBase&, llvm::Value *vrhs) -> llvm::Value* {
                     llvm::Value *z = llvm::ConstantFP::get(
                         llvm_visitor->llvm_context, llvm::APFloat(0.0));
                     return llvm_visitor->ir_builder->CreateFSub(z, vrhs);
@@ -1371,79 +1372,112 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
     {
         FortranLLVM::TrackLocation loc(llvm_visitor, node);
 
-        Nodecl::NodeclBase lhs = node.get_lhs();
-        Nodecl::NodeclBase rhs = node.get_rhs();
+        auto non_strict_logical_and = [&, this](
+            const Nodecl::NodeclBase &node,
+            const Nodecl::NodeclBase &lhs,
+            const Nodecl::NodeclBase &rhs,
+            std::function<llvm::Value *(const Nodecl::NodeclBase &)> eval_lhs,
+            std::function<llvm::Value *(const Nodecl::NodeclBase &)> eval_rhs) {
 
-        llvm::Value *vlhs = llvm_visitor->eval_expression(lhs);
+            llvm::Value *vlhs = eval_lhs(lhs);
 
-        llvm::BasicBlock *block_eval_lhs = llvm_visitor->get_current_block();
+            llvm::BasicBlock *block_eval_lhs
+                = llvm_visitor->get_current_block();
 
-        llvm::Value *vcond = llvm_visitor->ir_builder->CreateZExtOrTrunc(
-            vlhs, llvm_visitor->llvm_types.i1);
+            llvm::Value *vcond = llvm_visitor->ir_builder->CreateZExtOrTrunc(
+                vlhs, llvm_visitor->llvm_types.i1);
 
-        llvm::BasicBlock *block_eval_rhs = llvm::BasicBlock::Create(
-            llvm_visitor->llvm_context, "and.rhs", llvm_visitor->get_current_function());
-        llvm::BasicBlock *block_end = llvm::BasicBlock::Create(
-            llvm_visitor->llvm_context, "and.end", llvm_visitor->get_current_function());
-        llvm_visitor->ir_builder->CreateCondBr(vcond, block_eval_rhs, block_end);
+            llvm::BasicBlock *block_eval_rhs = llvm::BasicBlock::Create(
+                llvm_visitor->llvm_context,
+                "and.rhs",
+                llvm_visitor->get_current_function());
+            llvm::BasicBlock *block_end = llvm::BasicBlock::Create(
+                llvm_visitor->llvm_context,
+                "and.end",
+                llvm_visitor->get_current_function());
+            llvm_visitor->ir_builder->CreateCondBr(
+                vcond, block_eval_rhs, block_end);
 
-        llvm_visitor->set_current_block(block_eval_rhs);
-        llvm::Value *vrhs = llvm_visitor->eval_expression(rhs);
+            llvm_visitor->set_current_block(block_eval_rhs);
+            llvm::Value *vrhs = eval_rhs(rhs);
 
-        llvm_visitor->ir_builder->CreateBr(block_end);
+            llvm_visitor->ir_builder->CreateBr(block_end);
 
-        llvm_visitor->set_current_block(block_end);
-        value = llvm_visitor->ir_builder->CreatePHI(
-            llvm_visitor->get_llvm_type(node.get_type()), 2);
-        llvm::cast<llvm::PHINode>(value)->addIncoming(vlhs, block_eval_lhs);
-        llvm::cast<llvm::PHINode>(value)->addIncoming(vrhs, block_eval_rhs);
+            llvm_visitor->set_current_block(block_end);
+            llvm::Value *result = llvm_visitor->ir_builder->CreatePHI(
+                llvm_visitor->get_llvm_type(node.get_type()), 2);
+            llvm::cast<llvm::PHINode>(result)->addIncoming(vlhs, block_eval_lhs);
+            llvm::cast<llvm::PHINode>(result)->addIncoming(vrhs, block_eval_rhs);
+
+            return result;
+        };
+
+        return binary_operator_non_strict(node, non_strict_logical_and);
     }
 
     void visit(const Nodecl::LogicalOr& node)
     {
         FortranLLVM::TrackLocation loc(llvm_visitor, node);
 
-        Nodecl::NodeclBase lhs = node.get_lhs();
-        Nodecl::NodeclBase rhs = node.get_rhs();
-        llvm::BasicBlock *block_eval_lhs = llvm_visitor->get_current_block();
-        llvm::Value *vlhs = llvm_visitor->eval_expression(lhs);
+        auto non_strict_logical_or = [&, this](
+            const Nodecl::NodeclBase &node,
+            const Nodecl::NodeclBase &lhs,
+            const Nodecl::NodeclBase &rhs,
+            std::function<llvm::Value *(const Nodecl::NodeclBase &)> eval_lhs,
+            std::function<llvm::Value *(const Nodecl::NodeclBase &)> eval_rhs) {
+            llvm::BasicBlock *block_eval_lhs
+                = llvm_visitor->get_current_block();
+            llvm::Value *vlhs = eval_lhs(lhs);
 
-        llvm::Value *vcond = llvm_visitor->ir_builder->CreateZExtOrTrunc(
-            vlhs, llvm_visitor->llvm_types.i1);
+            llvm::Value *vcond = llvm_visitor->ir_builder->CreateZExtOrTrunc(
+                vlhs, llvm_visitor->llvm_types.i1);
 
-        llvm::BasicBlock *block_eval_rhs = llvm::BasicBlock::Create(
-            llvm_visitor->llvm_context, "or.rhs", llvm_visitor->get_current_function());
-        llvm::BasicBlock *block_end = llvm::BasicBlock::Create(
-            llvm_visitor->llvm_context, "or.end", llvm_visitor->get_current_function());
-        llvm_visitor->ir_builder->CreateCondBr(vcond, block_end, block_eval_rhs);
+            llvm::BasicBlock *block_eval_rhs = llvm::BasicBlock::Create(
+                llvm_visitor->llvm_context,
+                "or.rhs",
+                llvm_visitor->get_current_function());
+            llvm::BasicBlock *block_end = llvm::BasicBlock::Create(
+                llvm_visitor->llvm_context,
+                "or.end",
+                llvm_visitor->get_current_function());
+            llvm_visitor->ir_builder->CreateCondBr(
+                vcond, block_end, block_eval_rhs);
 
-        llvm_visitor->set_current_block(block_eval_rhs);
-        llvm::Value *vrhs = llvm_visitor->eval_expression(rhs);
+            llvm_visitor->set_current_block(block_eval_rhs);
+            llvm::Value *vrhs = eval_rhs(rhs);
 
-        llvm_visitor->ir_builder->CreateBr(block_end);
+            llvm_visitor->ir_builder->CreateBr(block_end);
 
-        llvm_visitor->set_current_block(block_end);
-        value = llvm_visitor->ir_builder->CreatePHI(
-            llvm_visitor->get_llvm_type(node.get_type()), 2);
-        llvm::cast<llvm::PHINode>(value)->addIncoming(vlhs, block_eval_lhs);
-        llvm::cast<llvm::PHINode>(value)->addIncoming(vrhs, block_eval_rhs);
+            llvm_visitor->set_current_block(block_end);
+            llvm::Value *result = llvm_visitor->ir_builder->CreatePHI(
+                llvm_visitor->get_llvm_type(node.get_type()), 2);
+            llvm::cast<llvm::PHINode>(result)->addIncoming(vlhs, block_eval_lhs);
+            llvm::cast<llvm::PHINode>(result)->addIncoming(vrhs, block_eval_rhs);
+
+            return result;
+        };
+
+        return binary_operator_non_strict(node, non_strict_logical_or);
     }
 
     void visit(const Nodecl::LogicalNot& node)
     {
-        FortranLLVM::TrackLocation loc(llvm_visitor, node);
-
         Nodecl::NodeclBase rhs = node.get_rhs();
-        TL::Type rhs_type = rhs.get_type();
+        TL::Type rhs_type = rhs.get_type().no_ref();
+        if (rhs_type.is_fortran_array())
+            rhs_type = rhs_type.fortran_array_base_element();
 
-        value = llvm_visitor->eval_expression(rhs);
-
-        // select x, 0, 1
-        value = llvm_visitor->ir_builder->CreateSelect(
-            llvm_visitor->ir_builder->CreateZExtOrTrunc(
-                value, llvm_visitor->llvm_types.i1),
-            llvm_visitor->get_integer_value(0, rhs_type),
-            llvm_visitor->get_integer_value(1, rhs_type));
+        return unary_operator(
+            node, [&, this](const Nodecl::NodeclBase, llvm::Value *vrhs) {
+                // select x, 0, 1
+                return llvm_visitor->ir_builder->CreateZExtOrTrunc(
+                    llvm_visitor->ir_builder->CreateSelect(
+                        llvm_visitor->ir_builder->CreateZExtOrTrunc(
+                            vrhs, llvm_visitor->llvm_types.i1),
+                        llvm_visitor->get_integer_value(0, rhs_type),
+                        llvm_visitor->get_integer_value(1, rhs_type)),
+                    llvm_visitor->get_llvm_type(node.get_type()));
+            });
     }
 
     template <typename Create>
@@ -1659,6 +1693,121 @@ class FortranVisitorLLVMExpression : public FortranVisitorLLVMExpressionBase
             llvm::Value *vrhs = llvm_visitor->eval_expression(rhs);
 
             value = binary_operator_scalar(lhs, rhs, vlhs, vrhs, create);
+        }
+    }
+
+    template <typename NonStrictOpt>
+    void binary_operator_array_non_strict(const Nodecl::NodeclBase &node,
+                               const Nodecl::NodeclBase &lhs,
+                               const Nodecl::NodeclBase &rhs,
+                               NonStrictOpt non_strict_op)
+    {
+        TL::Type node_type = node.get_type();
+
+        ERROR_CONDITION(
+            !node_type.is_fortran_array(), "The result must be an array!\n", 0);
+
+        TL::Type node_element_type = node_type.array_base_element();
+
+        llvm::Value *array_size
+            = llvm_visitor->eval_elements_of_array(node, node_type, /* addr */ nullptr);
+
+        // Allocate space for the result
+        llvm::Value *result_addr = llvm_visitor->ir_builder->CreateAlloca(
+                llvm_visitor->get_llvm_type(node_element_type), array_size);
+
+        // Index inside the contiguous result array. This is used for looping.
+        llvm::Value *result_idx_addr = llvm_visitor->ir_builder->CreateAlloca(
+            llvm_visitor->llvm_types.i64);
+        llvm_visitor->ir_builder->CreateStore(
+            llvm_visitor->get_integer_value_64(0), result_idx_addr);
+
+        LoopInfoOp loop_info_op;
+        create_loop_header_for_array_op(node, node_type, /* addr */ nullptr, loop_info_op);
+        std::vector<llvm::Value*> idx_val = derref_indexes(loop_info_op.idx_var);
+
+        auto eval_lhs = [&, this](Nodecl::NodeclBase lhs) -> llvm::Value * {
+            TL::Type lhs_type = lhs.get_type();
+            llvm::Value *lhs_value;
+            if (lhs_type.is_fortran_array())
+            {
+                llvm::Value *lhs_addr = llvm_visitor->eval_expression(lhs);
+                llvm::Value *lhs_addr_element = address_array_ith_element(
+                    lhs, lhs_type, lhs_addr, idx_val);
+                lhs_value
+                    = llvm_visitor->ir_builder->CreateLoad(lhs_addr_element);
+            }
+            else
+            {
+                lhs_value = llvm_visitor->eval_expression(lhs);
+            }
+            return lhs_value;
+        };
+
+        auto eval_rhs = [&, this](Nodecl::NodeclBase rhs) -> llvm::Value * {
+            TL::Type rhs_type = rhs.get_type();
+            llvm::Value *rhs_value;
+            if (rhs_type.is_fortran_array())
+            {
+                llvm::Value *rhs_addr = llvm_visitor->eval_expression(rhs);
+                llvm::Value *rhs_addr_element = address_array_ith_element(
+                    rhs, rhs_type, rhs_addr, idx_val);
+                rhs_value
+                    = llvm_visitor->ir_builder->CreateLoad(rhs_addr_element);
+            }
+            else
+            {
+                rhs_value = llvm_visitor->eval_expression(rhs);
+            }
+            return rhs_value;
+        };
+
+        llvm::Value *val_op = non_strict_op(node, lhs, rhs, eval_lhs, eval_rhs);
+
+        // FIXME - CHARACTER assignment!
+        llvm_visitor->ir_builder->CreateStore(
+            val_op,
+            llvm_visitor->ir_builder->CreateGEP(
+                result_addr,
+                { llvm_visitor->ir_builder->CreateLoad(result_idx_addr) }));
+
+        llvm_visitor->ir_builder->CreateStore(
+            llvm_visitor->ir_builder->CreateAdd(llvm_visitor->ir_builder->CreateLoad(result_idx_addr),
+                                    llvm_visitor->get_integer_value_64(1)),
+            result_idx_addr);
+        create_loop_footer_for_array_op(node_type, loop_info_op);
+
+        // The result array is an address in LLVM world.
+        value = result_addr;
+    }
+
+    template <typename Node, typename NonStrictOp>
+    void binary_operator_non_strict(const Node node, NonStrictOp non_strict_op)
+    {
+        FortranLLVM::TrackLocation loc(llvm_visitor, node);
+
+        Nodecl::NodeclBase lhs = node.get_lhs();
+        Nodecl::NodeclBase rhs = node.get_rhs();
+
+        TL::Type lhs_type = lhs.get_type();
+        TL::Type rhs_type = rhs.get_type();
+
+        if (lhs_type.is_fortran_array() || rhs_type.is_fortran_array())
+        {
+            return binary_operator_array_non_strict(
+                node, node.get_lhs(), node.get_rhs(), non_strict_op);
+        }
+        else
+        {
+            non_strict_op(node,
+                          node.get_lhs(),
+                          node.get_rhs(),
+                          [&, this](Nodecl::NodeclBase lhs) -> llvm::Value * {
+                              return llvm_visitor->eval_expression(lhs);
+                          },
+                          [&, this](Nodecl::NodeclBase rhs) -> llvm::Value * {
+                              return llvm_visitor->eval_expression(rhs);
+                          });
         }
     }
 
