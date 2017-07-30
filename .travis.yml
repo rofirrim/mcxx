@@ -13,7 +13,7 @@ before_install:
     - sudo apt-get install -qq -y gcc-6 g++-6 gfortran-6 flex bison gperf libsqlite3-dev clang-4.0 llvm-4.0-dev
 script:
     - "autoreconf -fiv &&
-    ./configure CC=gcc-6 CXX=g++-6 FC=gfortran-6 CFLAGS=\"-O0\" CXXFLAGS=\"-O0\" LLVM_CONFIG=\"/usr/bin/llvm-config-4.0\" --prefix=$HOME/mcxx-install --enable-fortran-llvm-codegen &&
+    ./configure CC=gcc-6 CXX=g++-6 GFORTRAN=gfortran-6 CFLAGS=\"-O0\" CXXFLAGS=\"-O0\" LLVM_CONFIG=\"/usr/bin/llvm-config-4.0\" --prefix=$HOME/mcxx-install --enable-fortran-llvm-codegen &&
     make -j$(nproc) &&
     make install &&
     make check"
