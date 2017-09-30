@@ -1080,8 +1080,110 @@ static scope_entry_t* new_procedure_symbol(
         AST name, AST prefix, AST suffix, AST dummy_arg_name_list,
         char is_function);
 
-static char allow_all_statements(AST a UNUSED_PARAMETER,
-        const decl_context_t* decl_context UNUSED_PARAMETER)
+#define ORDER_CLASS_TABLE \
+    ORDER_CLASS(SOC_USE, 0) \
+    ORDER_CLASS(SOC_IMPORT, 1) \
+    ORDER_CLASS(SOC_FORMAT, 2) \
+    ORDER_CLASS(SOC_ENTRY, 3) \
+    ORDER_CLASS(SOC_PARAMETER, 4) \
+    ORDER_CLASS(SOC_IMPLICIT, 5) \
+    ORDER_CLASS(SOC_IMPLICIT_NONE, 6) \
+    ORDER_CLASS(SOC_DATA, 7) \
+    ORDER_CLASS(SOC_DECLARATION, 8) \
+    ORDER_CLASS(SOC_EXECUTABLE, 9) \
+    ORDER_CLASS(SOC_EVERYWHERE, 10)
+
+typedef enum statement_order_class_t {
+    SOC_INVALID = 0,
+#define ORDER_CLASS(n, v) \
+    n = 1 << v,
+ORDER_CLASS_TABLE
+#undef ORDER_CLASS
+} statement_order_class_t;
+
+static const char *statement_order_class_print(
+    statement_order_class_t order_class)
+{
+    if (order_class == 0)
+        return "SOC_INVALID";
+
+    const char *ret = NULL;
+#define ORDER_CLASS(n, _) \
+    if (order_class & n)  { \
+        if (ret) \
+           uniquestr_sprintf(&ret, "%s | %s", ret, #n); \
+        else \
+           ret = #n; \
+    }
+    ORDER_CLASS_TABLE
+#undef ORDER_CLASS
+
+    return ret;
+}
+
+// Define the constant functions used in the statement handler table later.
+#define ORDER_CLASS(n, _) \
+    static statement_order_class_t GET_##n(AST a UNUSED_PARAMETER) { return n; }
+ORDER_CLASS_TABLE
+#undef ORDER_CLASS
+
+const statement_order_class_t statement_order[] = {
+    SOC_EVERYWHERE | SOC_USE,
+    SOC_EVERYWHERE | SOC_IMPORT,
+    SOC_EVERYWHERE | SOC_FORMAT | SOC_ENTRY | SOC_IMPLICIT_NONE,
+    SOC_EVERYWHERE | SOC_FORMAT | SOC_ENTRY | SOC_PARAMETER | SOC_IMPLICIT,
+    SOC_EVERYWHERE | SOC_FORMAT | SOC_ENTRY | SOC_PARAMETER | SOC_DATA | SOC_DECLARATION,
+    SOC_EVERYWHERE | SOC_FORMAT | SOC_ENTRY | SOC_DATA      | SOC_EXECUTABLE,
+};
+
+enum { STATEMENT_ORDER_NUM = sizeof(statement_order) / sizeof(*statement_order) };
+const statement_order_class_t *statement_order_end = &statement_order[STATEMENT_ORDER_NUM];
+
+typedef struct statement_constraint_checker_t statement_constraint_checker_t;
+typedef char (*allowed_statement_t)(statement_constraint_checker_t *,
+                                    AST,
+                                    const decl_context_t *);
+struct statement_constraint_checker_t
+{
+    const statement_order_class_t *current_order_class;
+    allowed_statement_t allowed_statement;
+};
+
+statement_constraint_checker_t statement_constraint_checker_init(
+    allowed_statement_t allowed_statement);
+
+statement_constraint_checker_t statement_constraint_checker_init(
+    allowed_statement_t allowed_statement)
+{
+    statement_constraint_checker_t ret
+        = { &statement_order[0], allowed_statement };
+    return ret;
+}
+
+static char statement_constraint_checker_update_order(
+    statement_constraint_checker_t *order_tracker UNUSED_PARAMETER, AST stmt);
+
+static char statement_constraint_checker_check_statement(
+    statement_constraint_checker_t *order_tracker,
+    AST stmt,
+    const decl_context_t *decl_context)
+{
+    if (!statement_constraint_checker_update_order(order_tracker, stmt))
+    {
+        error_printf_at(
+            ast_get_locus(stmt),
+            "statement is incorrectly located within the program unit\n");
+        return false;
+    }
+
+    return (order_tracker->allowed_statement)(
+        order_tracker, stmt, decl_context);
+}
+
+static char allow_all_statements(
+    statement_constraint_checker_t *checker UNUSED_PARAMETER,
+    AST a UNUSED_PARAMETER,
+    const decl_context_t *decl_context UNUSED_PARAMETER)
 {
     return 1;
 }
@@ -1091,7 +1193,7 @@ static void build_scope_program_unit_body(
         AST internal_subprograms,
         AST end_statement,
         const decl_context_t* decl_context,
-        char (*allowed_statement)(AST, const decl_context_t*),
+        statement_constraint_checker_t* constraint_checker,
         nodecl_t* nodecl_output,
         nodecl_t* nodecl_internal_subprograms);
 
@@ -1139,11 +1241,15 @@ static void build_scope_main_program_unit(AST program_unit,
         AST statement_seq = ASTSon0(top_level);
         AST internal_subprograms = ASTSon1(program_body);
 
-        build_scope_program_unit_body(
-                statement_seq,
-                internal_subprograms,
-                end_statement,
-                program_unit_context, allow_all_statements, &nodecl_body, &nodecl_internal_subprograms);
+        statement_constraint_checker_t constraint_checker
+            = statement_constraint_checker_init(allow_all_statements);
+        build_scope_program_unit_body(statement_seq,
+                                      internal_subprograms,
+                                      end_statement,
+                                      program_unit_context,
+                                      &constraint_checker,
+                                      &nodecl_body,
+                                      &nodecl_internal_subprograms);
     }
 
     if (nodecl_is_null(nodecl_body) && nodecl_is_null(nodecl_internal_subprograms))
@@ -1239,11 +1345,15 @@ static void build_scope_function_program_unit(AST program_unit,
         AST statement_seq = ASTSon0(top_level);
         AST internal_subprograms = ASTSon1(program_body);
 
-        build_scope_program_unit_body(
-                statement_seq,
-                internal_subprograms,
-                end_statement,
-                program_unit_context, allow_all_statements, &nodecl_body, &nodecl_internal_subprograms);
+        statement_constraint_checker_t constraint_checker
+            = statement_constraint_checker_init(allow_all_statements);
+        build_scope_program_unit_body(statement_seq,
+                                      internal_subprograms,
+                                      end_statement,
+                                      program_unit_context,
+                                      &constraint_checker,
+                                      &nodecl_body,
+                                      &nodecl_internal_subprograms);
     }
 
     if (nodecl_is_null(nodecl_body) && nodecl_is_null(nodecl_internal_subprograms))
@@ -1352,11 +1462,15 @@ static void build_scope_subroutine_program_unit(AST program_unit,
         AST statement_seq = ASTSon0(top_level);
         AST internal_subprograms = ASTSon1(program_body);
 
-        build_scope_program_unit_body(
-                statement_seq,
-                internal_subprograms,
-                end_statement,
-                program_unit_context, allow_all_statements, &nodecl_body, &nodecl_internal_subprograms);
+        statement_constraint_checker_t constraint_checker
+            = statement_constraint_checker_init(allow_all_statements);
+        build_scope_program_unit_body(statement_seq,
+                                      internal_subprograms,
+                                      end_statement,
+                                      program_unit_context,
+                                      &constraint_checker,
+                                      &nodecl_body,
+                                      &nodecl_internal_subprograms);
     }
 
     if (nodecl_is_null(nodecl_body) && nodecl_is_null(nodecl_internal_subprograms))
@@ -1455,11 +1569,15 @@ static void build_scope_module_program_unit(AST program_unit,
         AST statement_seq = ASTSon0(module_body);
         AST internal_subprograms = ASTSon1(module_body);
 
-        build_scope_program_unit_body(
-                statement_seq,
-                internal_subprograms,
-                NULL,
-                program_unit_context, allow_all_statements, &nodecl_body, &nodecl_internal_subprograms);
+        statement_constraint_checker_t constraint_checker
+            = statement_constraint_checker_init(allow_all_statements);
+        build_scope_program_unit_body(statement_seq,
+                                      internal_subprograms,
+                                      NULL,
+                                      program_unit_context,
+                                      &constraint_checker,
+                                      &nodecl_body,
+                                      &nodecl_internal_subprograms);
     }
 
     // This deserves an explanation: if a module does not contain any procedure
@@ -1563,11 +1681,15 @@ static void build_scope_block_data_program_unit(AST program_unit,
         AST statement_seq = program_body;
         AST internal_subprograms = NULL;
 
-        build_scope_program_unit_body(
-                statement_seq,
-                internal_subprograms,
-                NULL,
-                program_unit_context, allow_all_statements, &nodecl_body, &nodecl_internal_subprograms);
+        statement_constraint_checker_t constraint_checker
+            = statement_constraint_checker_init(allow_all_statements);
+        build_scope_program_unit_body(statement_seq,
+                                      internal_subprograms,
+                                      NULL,
+                                      program_unit_context,
+                                      &constraint_checker,
+                                      &nodecl_body,
+                                      &nodecl_internal_subprograms);
     }
 
     *nodecl_output = nodecl_make_list_1(
@@ -1586,12 +1708,15 @@ static void build_global_program_unit(AST program_unit)
     nodecl_t nodecl_body = nodecl_null();
     nodecl_t nodecl_internal_subprograms = nodecl_null();
 
+    statement_constraint_checker_t constraint_checker
+        = statement_constraint_checker_init(allow_all_statements);
+
     build_scope_program_unit_body(
             statement_seq,
             NULL,
             NULL,
             program_unit_context, 
-            allow_all_statements, 
+            &constraint_checker, 
             &nodecl_body, 
             &nodecl_internal_subprograms);
 }
@@ -2240,15 +2365,16 @@ static scope_entry_t* new_entry_symbol(const decl_context_t* decl_context,
     return entry;
 }
 
-static char statement_is_executable(AST statement);
-static char statement_is_nonexecutable(AST statement);
 static void build_scope_ambiguity_statement(AST ambig_stmt, const decl_context_t* decl_context, char is_declaration);
 
+static statement_order_class_t statement_get_order_class(AST statement);
+
 static void build_scope_program_unit_body_declarations(
-        char (*allowed_statement)(AST, const decl_context_t*),
+        statement_constraint_checker_t *constraint_checker,
         AST program_unit_stmts,
         const decl_context_t* decl_context,
-        nodecl_t* nodecl_output UNUSED_PARAMETER)
+        AST *first_executable_statement,
+        nodecl_t* nodecl_output)
 {
     if (program_unit_stmts != NULL)
     {
@@ -2273,22 +2399,26 @@ static void build_scope_program_unit_body_declarations(
                 solve_postponed_function_type_spec(decl_context);
             }
 
-            if (!allowed_statement(stmt, decl_context))
+            // We only handle nonexecutable statements here
+            if (statement_get_order_class(stmt) == SOC_EXECUTABLE)
             {
-                error_printf_at(ast_get_locus(stmt), "this statement cannot be used in this context\n");
+                *first_executable_statement = it;
+                break;
+            }
+
+            if (!statement_constraint_checker_check_statement(
+                    constraint_checker, stmt, decl_context))
                 continue;
-            }
 
-            // We only handle nonexecutable statements here 
-            if (statement_is_nonexecutable(stmt))
-            {
-                // Nonexecutable statements usually do not generate nodecls, but some
-                // of them do (e.g. during initialization of saved array dimensions)
-                nodecl_t nodecl_statement = nodecl_null();
-                fortran_build_scope_statement(stmt, decl_context, &nodecl_statement);
+            // Nonexecutable statements usually do not generate nodecls, but
+            // some of them do (e.g. during initialization of saved array
+            // dimensions)
+            nodecl_t nodecl_statement = nodecl_null();
+            fortran_build_scope_statement(
+                stmt, decl_context, &nodecl_statement);
 
-                *nodecl_output = nodecl_concat_lists(*nodecl_output, nodecl_statement);
-            }
+            *nodecl_output
+                = nodecl_concat_lists(*nodecl_output, nodecl_statement);
         }
     }
 
@@ -2300,40 +2430,78 @@ static void build_scope_program_unit_body_declarations(
 }
 
 static void build_scope_program_unit_body_executable(
-        char (*allowed_statement)(AST, const decl_context_t*),
+        statement_constraint_checker_t *constraint_checker,
         AST program_unit_stmts,
+        AST first_executable_statement,
         AST end_statement,
         const decl_context_t* decl_context,
         nodecl_t* nodecl_output)
 {
+    // Given that ENTRY statements are both non-executable and executable, we need to make sure
+    // we handle a second time ENTRY statements that have been seen before the first executable
+    // statement.
+    AST it;
     if (program_unit_stmts != NULL)
     {
-        AST it;
         for_each_element(program_unit_stmts, it)
+        {
+            if (it == first_executable_statement)
+                break;
+            AST stmt = ASTSon1(it);
+
+            if (statement_get_order_class(stmt) == SOC_ENTRY)
+            {
+                nodecl_t nodecl_statement = nodecl_null();
+                fortran_build_scope_statement(
+                    stmt, decl_context, &nodecl_statement);
+
+                // This second time they generate a nodecl.
+                *nodecl_output
+                    = nodecl_concat_lists(*nodecl_output, nodecl_statement);
+            }
+        }
+    }
+
+    // if program_unit_stmts == NULL then first_executable_statement == NULL
+    if (first_executable_statement != NULL)
+    {
+        for_each_element_in_range(first_executable_statement, program_unit_stmts, it)
         {
             AST stmt = ASTSon1(it);
 
             // Exceptionally we run this one first otherwise it is not possible to
-            // tell whether this is an executable or non-executable statement
+            // tell anything about this statement.
             if (ASTKind(stmt) == AST_AMBIGUITY)
             {
                 build_scope_ambiguity_statement(stmt, decl_context, /* is_declaration */ 0);
             }
 
-            if (!allowed_statement(stmt, decl_context))
-            {
-                error_printf_at(ast_get_locus(stmt), "this statement cannot be used in this context\n");
+            // Depending on the order of the statements some SOC_EVERYWHERE might have been handled in 
+            // build_scope_program_unit_body_declarations.
+            if (!statement_constraint_checker_check_statement(
+                    constraint_checker, stmt, decl_context))
                 continue;
-            }
-            
-            // We only handle executable statements here
-            if (statement_is_executable(stmt))
+
+            // As the ENTRY statement is both executable and non-executable, if
+            // we find it in the executable part we need to handle it first
+            // as if it were a declaration.
+            if (statement_get_order_class(stmt) == SOC_ENTRY)
             {
                 nodecl_t nodecl_statement = nodecl_null();
-                fortran_build_scope_statement(stmt, decl_context, &nodecl_statement);
-
-                *nodecl_output = nodecl_concat_lists(*nodecl_output, nodecl_statement);
+                fortran_build_scope_statement(
+                    stmt, decl_context, &nodecl_statement);
+                ERROR_CONDITION(
+                    !nodecl_is_null(nodecl_statement),
+                    "ENTRY statement generated a nodecl when it didn't have to",
+                    0);
             }
+
+            nodecl_t nodecl_statement = nodecl_null();
+            fortran_build_scope_statement(
+                stmt, decl_context, &nodecl_statement);
+
+            *nodecl_output
+                = nodecl_concat_lists(*nodecl_output, nodecl_statement);
         }
     }
 
@@ -2365,7 +2533,9 @@ struct internal_subprograms_info_tag
     AST program_unit_stmts;
     AST end_statement;
     AST internal_subprograms;
+    AST first_executable_statement;
     const locus_t* locus;
+    statement_constraint_checker_t constraint_checker;
 
     build_scope_delay_list_t delayed_list;
 } internal_subprograms_info_t;
@@ -2463,8 +2633,11 @@ static scope_entry_t* build_scope_internal_subprogram(
         internal_subprograms_info->decl_context = subprogram_unit_context;
         internal_subprograms_info->program_unit_stmts = program_unit_stmts;
         internal_subprograms_info->end_statement = end_statement;
-        internal_subprograms_info->internal_subprograms = n_internal_subprograms;
+        internal_subprograms_info->internal_subprograms
+            = n_internal_subprograms;
         internal_subprograms_info->locus = ast_get_locus(program_body);
+        internal_subprograms_info->constraint_checker
+            = statement_constraint_checker_init(allow_all_statements);
 
         scope_entry_t* enclosing_sym = decl_context->current_scope->related_entry;
 
@@ -2481,9 +2654,10 @@ static scope_entry_t* build_scope_internal_subprogram(
         }
 
         build_scope_program_unit_body_declarations(
-                allow_all_statements,
+                &internal_subprograms_info->constraint_checker,
                 internal_subprograms_info->program_unit_stmts, 
                 internal_subprograms_info->decl_context,
+                &internal_subprograms_info->first_executable_statement,
                 &(internal_subprograms_info->nodecl_output));
     }
 
@@ -2554,8 +2728,9 @@ static void build_scope_program_unit_body_internal_subprograms_executable(
                     &(internal_subprograms_info[i].nodecl_output));
 
             build_scope_program_unit_body_executable(
-                    allow_all_statements,
+                    &internal_subprograms_info[i].constraint_checker,
                     internal_subprograms_info[i].program_unit_stmts,
+                    internal_subprograms_info[i].first_executable_statement,
                     internal_subprograms_info[i].end_statement,
                     internal_subprograms_info[i].decl_context,
                     &(internal_subprograms_info[i].nodecl_output));
@@ -2638,17 +2813,19 @@ static void build_scope_program_unit_body(
         AST internal_subprograms,
         AST end_statement,
         const decl_context_t* decl_context,
-        char (*allowed_statement)(AST, const decl_context_t*),
+        statement_constraint_checker_t* constraint_checker,
         nodecl_t* nodecl_output,
         nodecl_t* nodecl_internal_subprograms)
 {
     // 1) Program unit declaration only
     build_scope_delay_list_t program_unit_delayed = { .num_delayed = 0 };
     build_scope_delay_list_push(&program_unit_delayed);
+    AST first_executable_statement = NULL;
     build_scope_program_unit_body_declarations(
-            allowed_statement,
+            constraint_checker,
             program_unit_stmts, 
             decl_context, 
+            &first_executable_statement,
             nodecl_output);
     build_scope_delay_list_pop();
 
@@ -2668,8 +2845,9 @@ static void build_scope_program_unit_body(
     build_scope_delay_list_run(&program_unit_delayed, nodecl_output);
 
     build_scope_program_unit_body_executable(
-            allowed_statement,
-            program_unit_stmts, 
+            constraint_checker,
+            program_unit_stmts,
+            first_executable_statement, 
             end_statement,
             decl_context,
             nodecl_output);
@@ -2706,124 +2884,101 @@ static void build_scope_program_unit_body(
 
 typedef void (*build_scope_statement_function_t)(AST statement, const decl_context_t*, nodecl_t* nodecl_output);
 
-typedef
-enum statement_kind_tag
-{
-    STMT_KIND_UNKNOWN = 0,
-    STMT_KIND_EXECUTABLE = 1,
-    STMT_KIND_NONEXECUTABLE = 2,
-    STMT_KIND_BOTH = 3,
-} statement_kind_t;
-
-static statement_kind_t kind_nonexecutable_0(AST a UNUSED_PARAMETER)
-{
-    return STMT_KIND_NONEXECUTABLE;
-}
-
-static statement_kind_t kind_executable_0(AST a UNUSED_PARAMETER)
-{
-    return STMT_KIND_EXECUTABLE;
-}
-
-static statement_kind_t kind_any_0(AST a UNUSED_PARAMETER)
-{
-    return STMT_KIND_BOTH;
-}
-
-static statement_kind_t kind_of_son_1(AST a);
+static statement_order_class_t get_soc_from_son_1(AST a);
 
 typedef struct build_scope_statement_handler_tag
 {
     node_t ast_kind;
     build_scope_statement_function_t handler;
-    statement_kind_t (*statement_kind)(AST);
+    statement_order_class_t (*get_order_class)(AST);
 } build_scope_statement_handler_t;
 
 #define STATEMENT_HANDLER_TABLE \
- STATEMENT_HANDLER(AST_ACCESS_STATEMENT,              build_scope_access_stmt,           kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_ALLOCATABLE_STATEMENT,         build_scope_allocatable_stmt,      kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_ALLOCATE_STATEMENT,            build_scope_allocate_stmt,         kind_executable_0    ) \
- STATEMENT_HANDLER(AST_ALL_STOP_STATEMENT,            build_scope_allstop_stmt,          kind_executable_0    ) \
- STATEMENT_HANDLER(AST_ARITHMETIC_IF_STATEMENT,       build_scope_arithmetic_if_stmt,    kind_executable_0    ) \
- STATEMENT_HANDLER(AST_EXPRESSION_STATEMENT,          build_scope_expression_stmt,       kind_executable_0    ) \
- STATEMENT_HANDLER(AST_ASSOCIATE_CONSTRUCT,           build_scope_associate_construct,   kind_executable_0    ) \
- STATEMENT_HANDLER(AST_ASYNCHRONOUS_STATEMENT,        build_scope_asynchronous_stmt,     kind_executable_0    ) \
- STATEMENT_HANDLER(AST_IO_STATEMENT,                  build_io_stmt,                     kind_executable_0    ) \
- STATEMENT_HANDLER(AST_BIND_STATEMENT,                build_scope_bind_stmt,             kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_BLOCK_CONSTRUCT,               build_scope_block_construct,       kind_executable_0    ) \
- STATEMENT_HANDLER(AST_SWITCH_STATEMENT,              build_scope_case_construct,        kind_executable_0    ) \
- STATEMENT_HANDLER(AST_CASE_STATEMENT,                build_scope_case_statement,        kind_executable_0    ) \
- STATEMENT_HANDLER(AST_DEFAULT_STATEMENT,             build_scope_default_statement,     kind_executable_0    ) \
- STATEMENT_HANDLER(AST_CLOSE_STATEMENT,               build_scope_close_stmt,            kind_executable_0    ) \
- STATEMENT_HANDLER(AST_CODIMENSION_STATEMENT,         build_scope_codimension_stmt,      kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_COMMON_STATEMENT,              build_scope_common_stmt,           kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_COMPOUND_STATEMENT,            build_scope_compound_statement,    kind_executable_0    ) \
- STATEMENT_HANDLER(AST_COMPUTED_GOTO_STATEMENT,       build_scope_computed_goto_stmt,    kind_executable_0    ) \
- STATEMENT_HANDLER(AST_ASSIGNED_GOTO_STATEMENT,       build_scope_assigned_goto_stmt,    kind_executable_0    ) \
- STATEMENT_HANDLER(AST_LABEL_ASSIGN_STATEMENT,        build_scope_label_assign_stmt,     kind_executable_0    ) \
- STATEMENT_HANDLER(AST_LABELED_STATEMENT,             build_scope_labeled_stmt,          kind_of_son_1        ) \
- STATEMENT_HANDLER(AST_EMPTY_STATEMENT,               build_scope_continue_stmt,         kind_executable_0    ) \
- STATEMENT_HANDLER(AST_CRITICAL_CONSTRUCT,            build_scope_critical_construct,    kind_executable_0    ) \
- STATEMENT_HANDLER(AST_CONTINUE_STATEMENT,            build_scope_cycle_stmt,            kind_executable_0    ) \
- STATEMENT_HANDLER(AST_DATA_STATEMENT,                build_scope_data_stmt,             kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_DEALLOCATE_STATEMENT,          build_scope_deallocate_stmt,       kind_executable_0    ) \
- STATEMENT_HANDLER(AST_DERIVED_TYPE_DEF,              build_scope_derived_type_def,      kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_DIMENSION_STATEMENT,           build_scope_dimension_stmt,        kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_FOR_STATEMENT,                 build_scope_do_construct,          kind_executable_0    ) \
- STATEMENT_HANDLER(AST_ENUM_DEF,                      build_scope_enum_def,              kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_EQUIVALENCE_STATEMENT,         build_scope_equivalence_stmt,      kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_BREAK_STATEMENT,               build_scope_exit_stmt,             kind_executable_0    ) \
- STATEMENT_HANDLER(AST_EXTERNAL_STATEMENT,            build_scope_external_stmt,         kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_FORALL_CONSTRUCT,              build_scope_forall_construct,      kind_executable_0    ) \
- STATEMENT_HANDLER(AST_FORALL_STATEMENT,              build_scope_forall_stmt,           kind_executable_0    ) \
- STATEMENT_HANDLER(AST_FORMAT_STATEMENT,              build_scope_format_stmt,           kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_GOTO_STATEMENT,                build_scope_goto_stmt,             kind_executable_0    ) \
- STATEMENT_HANDLER(AST_IF_ELSE_STATEMENT,             build_scope_if_construct,          kind_executable_0    ) \
- STATEMENT_HANDLER(AST_IMPLICIT_STATEMENT,            build_scope_implicit_stmt,         kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_IMPORT_STATEMENT,              build_scope_import_stmt,           kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_INTENT_STATEMENT,              build_scope_intent_stmt,           kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_INTERFACE_BLOCK,               build_scope_interface_block,       kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_INTRINSIC_STATEMENT,           build_scope_intrinsic_stmt,        kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_LOCK_STATEMENT,                build_scope_lock_stmt,             kind_executable_0    ) \
- STATEMENT_HANDLER(AST_NAMELIST_STATEMENT,            build_scope_namelist_stmt,         kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_NULLIFY_STATEMENT,             build_scope_nullify_stmt,          kind_executable_0    ) \
- STATEMENT_HANDLER(AST_OPEN_STATEMENT,                build_scope_open_stmt,             kind_executable_0    ) \
- STATEMENT_HANDLER(AST_OPTIONAL_STATEMENT,            build_scope_optional_stmt,         kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_PARAMETER_STATEMENT,           build_scope_parameter_stmt,        kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_CRAY_POINTER_STATEMENT,        build_scope_cray_pointer_stmt,     kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_POINTER_STATEMENT,             build_scope_pointer_stmt,          kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_PRINT_STATEMENT,               build_scope_print_stmt,            kind_executable_0    ) \
- STATEMENT_HANDLER(AST_PROCEDURE_DECL_STATEMENT,      build_scope_procedure_decl_stmt,   kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_PROTECTED_STATEMENT,           build_scope_protected_stmt,        kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_READ_STATEMENT,                build_scope_read_stmt,             kind_executable_0    ) \
- STATEMENT_HANDLER(AST_RETURN_STATEMENT,              build_scope_return_stmt,           kind_executable_0    ) \
- STATEMENT_HANDLER(AST_SAVE_STATEMENT,                build_scope_save_stmt,             kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_SELECT_TYPE_CONSTRUCT,         build_scope_select_type_construct, kind_executable_0    ) \
- STATEMENT_HANDLER(AST_STATEMENT_FUNCTION_STATEMENT,  build_scope_stmt_function_stmt,    kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_STOP_STATEMENT,                build_scope_stop_stmt,             kind_executable_0    ) \
- STATEMENT_HANDLER(AST_PAUSE_STATEMENT,               build_scope_pause_stmt,            kind_executable_0    ) \
- STATEMENT_HANDLER(AST_SYNC_ALL_STATEMENT,            build_scope_sync_all_stmt,         kind_executable_0    ) \
- STATEMENT_HANDLER(AST_SYNC_IMAGES_STATEMENT,         build_scope_sync_images_stmt,      kind_executable_0    ) \
- STATEMENT_HANDLER(AST_SYNC_MEMORY_STATEMENT,         build_scope_sync_memory_stmt,      kind_executable_0    ) \
- STATEMENT_HANDLER(AST_TARGET_STATEMENT,              build_scope_target_stmt,           kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_DECLARATION_STATEMENT,         build_scope_declaration_stmt,      kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_UNLOCK_STATEMENT,              build_scope_unlock_stmt,           kind_executable_0    ) \
- STATEMENT_HANDLER(AST_USE_STATEMENT,                 build_scope_use_stmt,              kind_nonexecutable_0    ) \
- STATEMENT_HANDLER(AST_USE_ONLY_STATEMENT,            build_scope_use_stmt,              kind_nonexecutable_0    ) \
- STATEMENT_HANDLER(AST_VALUE_STATEMENT,               build_scope_value_stmt,            kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_VOLATILE_STATEMENT,            build_scope_volatile_stmt,         kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_WAIT_STATEMENT,                build_scope_wait_stmt,             kind_executable_0    ) \
- STATEMENT_HANDLER(AST_WHERE_CONSTRUCT,               build_scope_where_construct,       kind_executable_0    ) \
- STATEMENT_HANDLER(AST_WHERE_STATEMENT,               build_scope_where_stmt,            kind_executable_0    ) \
- STATEMENT_HANDLER(AST_WHILE_STATEMENT,               build_scope_while_stmt,            kind_executable_0    ) \
- STATEMENT_HANDLER(AST_WRITE_STATEMENT,               build_scope_write_stmt,            kind_executable_0    ) \
- STATEMENT_HANDLER(AST_PRAGMA_CUSTOM_CONSTRUCT,       build_scope_pragma_custom_ctr,     kind_executable_0  ) \
- STATEMENT_HANDLER(AST_PRAGMA_CUSTOM_DIRECTIVE,       build_scope_pragma_custom_dir,     kind_executable_0 ) \
- STATEMENT_HANDLER(AST_UNKNOWN_PRAGMA,                build_scope_unknown_pragma,        kind_executable_0  ) \
- STATEMENT_HANDLER(AST_STATEMENT_PLACEHOLDER,         build_scope_statement_placeholder, kind_executable_0  ) \
- STATEMENT_HANDLER(AST_ENTRY_STATEMENT,               build_scope_entry_stmt,            kind_any_0 ) \
- STATEMENT_HANDLER(AST_TYPEDEF_DECLARATION_STATEMENT, build_scope_typedef_stmt,          kind_nonexecutable_0 ) \
- STATEMENT_HANDLER(AST_NODECL_LITERAL,                build_scope_nodecl_literal,        kind_executable_0 ) \
+ STATEMENT_HANDLER(AST_ACCESS_STATEMENT,              build_scope_access_stmt,           GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_ALLOCATABLE_STATEMENT,         build_scope_allocatable_stmt,      GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_ALLOCATE_STATEMENT,            build_scope_allocate_stmt,         GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_ALL_STOP_STATEMENT,            build_scope_allstop_stmt,          GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_ARITHMETIC_IF_STATEMENT,       build_scope_arithmetic_if_stmt,    GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_EXPRESSION_STATEMENT,          build_scope_expression_stmt,       GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_ASSOCIATE_CONSTRUCT,           build_scope_associate_construct,   GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_ASYNCHRONOUS_STATEMENT,        build_scope_asynchronous_stmt,     GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_IO_STATEMENT,                  build_io_stmt,                     GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_BIND_STATEMENT,                build_scope_bind_stmt,             GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_BLOCK_CONSTRUCT,               build_scope_block_construct,       GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_SWITCH_STATEMENT,              build_scope_case_construct,        GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_CASE_STATEMENT,                build_scope_case_statement,        GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_DEFAULT_STATEMENT,             build_scope_default_statement,     GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_CLOSE_STATEMENT,               build_scope_close_stmt,            GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_CODIMENSION_STATEMENT,         build_scope_codimension_stmt,      GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_COMMON_STATEMENT,              build_scope_common_stmt,           GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_COMPOUND_STATEMENT,            build_scope_compound_statement,    GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_COMPUTED_GOTO_STATEMENT,       build_scope_computed_goto_stmt,    GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_ASSIGNED_GOTO_STATEMENT,       build_scope_assigned_goto_stmt,    GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_LABEL_ASSIGN_STATEMENT,        build_scope_label_assign_stmt,     GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_LABELED_STATEMENT,             build_scope_labeled_stmt,          get_soc_from_son_1) \
+ STATEMENT_HANDLER(AST_EMPTY_STATEMENT,               build_scope_continue_stmt,         GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_CRITICAL_CONSTRUCT,            build_scope_critical_construct,    GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_CONTINUE_STATEMENT,            build_scope_cycle_stmt,            GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_DATA_STATEMENT,                build_scope_data_stmt,             GET_SOC_DATA) \
+ STATEMENT_HANDLER(AST_DEALLOCATE_STATEMENT,          build_scope_deallocate_stmt,       GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_DERIVED_TYPE_DEF,              build_scope_derived_type_def,      GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_DIMENSION_STATEMENT,           build_scope_dimension_stmt,        GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_FOR_STATEMENT,                 build_scope_do_construct,          GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_ENUM_DEF,                      build_scope_enum_def,              GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_EQUIVALENCE_STATEMENT,         build_scope_equivalence_stmt,      GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_BREAK_STATEMENT,               build_scope_exit_stmt,             GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_EXTERNAL_STATEMENT,            build_scope_external_stmt,         GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_FORALL_CONSTRUCT,              build_scope_forall_construct,      GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_FORALL_STATEMENT,              build_scope_forall_stmt,           GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_FORMAT_STATEMENT,              build_scope_format_stmt,           GET_SOC_FORMAT) \
+ STATEMENT_HANDLER(AST_GOTO_STATEMENT,                build_scope_goto_stmt,             GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_IF_ELSE_STATEMENT,             build_scope_if_construct,          GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_IMPLICIT_STATEMENT,            build_scope_implicit_stmt,         GET_SOC_IMPLICIT) \
+ STATEMENT_HANDLER(AST_IMPLICIT_NONE_STATEMENT,       build_scope_implicit_stmt,         GET_SOC_IMPLICIT_NONE) \
+ STATEMENT_HANDLER(AST_IMPORT_STATEMENT,              build_scope_import_stmt,           GET_SOC_IMPORT) \
+ STATEMENT_HANDLER(AST_INTENT_STATEMENT,              build_scope_intent_stmt,           GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_INTERFACE_BLOCK,               build_scope_interface_block,       GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_INTRINSIC_STATEMENT,           build_scope_intrinsic_stmt,        GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_LOCK_STATEMENT,                build_scope_lock_stmt,             GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_NAMELIST_STATEMENT,            build_scope_namelist_stmt,         GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_NULLIFY_STATEMENT,             build_scope_nullify_stmt,          GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_OPEN_STATEMENT,                build_scope_open_stmt,             GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_OPTIONAL_STATEMENT,            build_scope_optional_stmt,         GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_PARAMETER_STATEMENT,           build_scope_parameter_stmt,        GET_SOC_PARAMETER) \
+ STATEMENT_HANDLER(AST_CRAY_POINTER_STATEMENT,        build_scope_cray_pointer_stmt,     GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_POINTER_STATEMENT,             build_scope_pointer_stmt,          GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_PRINT_STATEMENT,               build_scope_print_stmt,            GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_PROCEDURE_DECL_STATEMENT,      build_scope_procedure_decl_stmt,   GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_PROTECTED_STATEMENT,           build_scope_protected_stmt,        GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_READ_STATEMENT,                build_scope_read_stmt,             GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_RETURN_STATEMENT,              build_scope_return_stmt,           GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_SAVE_STATEMENT,                build_scope_save_stmt,             GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_SELECT_TYPE_CONSTRUCT,         build_scope_select_type_construct, GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_STATEMENT_FUNCTION_STATEMENT,  build_scope_stmt_function_stmt,    GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_STOP_STATEMENT,                build_scope_stop_stmt,             GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_PAUSE_STATEMENT,               build_scope_pause_stmt,            GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_SYNC_ALL_STATEMENT,            build_scope_sync_all_stmt,         GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_SYNC_IMAGES_STATEMENT,         build_scope_sync_images_stmt,      GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_SYNC_MEMORY_STATEMENT,         build_scope_sync_memory_stmt,      GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_TARGET_STATEMENT,              build_scope_target_stmt,           GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_DECLARATION_STATEMENT,         build_scope_declaration_stmt,      GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_UNLOCK_STATEMENT,              build_scope_unlock_stmt,           GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_USE_STATEMENT,                 build_scope_use_stmt,              GET_SOC_USE) \
+ STATEMENT_HANDLER(AST_USE_ONLY_STATEMENT,            build_scope_use_stmt,              GET_SOC_USE) \
+ STATEMENT_HANDLER(AST_VALUE_STATEMENT,               build_scope_value_stmt,            GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_VOLATILE_STATEMENT,            build_scope_volatile_stmt,         GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_WAIT_STATEMENT,                build_scope_wait_stmt,             GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_WHERE_CONSTRUCT,               build_scope_where_construct,       GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_WHERE_STATEMENT,               build_scope_where_stmt,            GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_WHILE_STATEMENT,               build_scope_while_stmt,            GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_WRITE_STATEMENT,               build_scope_write_stmt,            GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_PRAGMA_CUSTOM_CONSTRUCT,       build_scope_pragma_custom_ctr,     GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_PRAGMA_CUSTOM_DIRECTIVE,       build_scope_pragma_custom_dir,     GET_SOC_EVERYWHERE) \
+ STATEMENT_HANDLER(AST_UNKNOWN_PRAGMA,                build_scope_unknown_pragma,        GET_SOC_EVERYWHERE) \
+ STATEMENT_HANDLER(AST_STATEMENT_PLACEHOLDER,         build_scope_statement_placeholder, GET_SOC_EXECUTABLE) \
+ STATEMENT_HANDLER(AST_ENTRY_STATEMENT,               build_scope_entry_stmt,            GET_SOC_ENTRY) \
+ STATEMENT_HANDLER(AST_TYPEDEF_DECLARATION_STATEMENT, build_scope_typedef_stmt,          GET_SOC_DECLARATION) \
+ STATEMENT_HANDLER(AST_NODECL_LITERAL,                build_scope_nodecl_literal,        GET_SOC_EXECUTABLE) \
 
 // Prototypes
 #define STATEMENT_HANDLER(_kind, _handler, _) \
@@ -2832,8 +2987,8 @@ STATEMENT_HANDLER_TABLE
 #undef STATEMENT_HANDLER
 
 // Table
-#define STATEMENT_HANDLER(_kind, _handler, _stmt_kind) \
-   { .ast_kind = _kind, .handler = _handler, .statement_kind = _stmt_kind },
+#define STATEMENT_HANDLER(_kind, _handler, _order_class) \
+   { .ast_kind = _kind, .handler = _handler, .get_order_class = _order_class},
 static build_scope_statement_handler_t build_scope_statement_function[] = 
 {
   STATEMENT_HANDLER_TABLE
@@ -2871,57 +3026,96 @@ static void init_statement_array(void)
     }
 }
 
-static char statement_get_kind(AST statement)
+static build_scope_statement_handler_t *statement_get_statement_handler(
+    AST statement)
 {
     init_statement_array();
 
-    build_scope_statement_handler_t key = { .ast_kind = ASTKind(statement) };
+    build_scope_statement_handler_t key = {.ast_kind = ASTKind(statement) };
     build_scope_statement_handler_t *handler = NULL;
 
-    handler = (build_scope_statement_handler_t*)bsearch(&key, build_scope_statement_function, 
-            sizeof(build_scope_statement_function) / sizeof(build_scope_statement_function[0]),
-            sizeof(build_scope_statement_function[0]),
-            build_scope_statement_function_compare);
+    handler = (build_scope_statement_handler_t *)bsearch(
+        &key,
+        build_scope_statement_function,
+        sizeof(build_scope_statement_function)
+            / sizeof(build_scope_statement_function[0]),
+        sizeof(build_scope_statement_function[0]),
+        build_scope_statement_function_compare);
 
-    ERROR_CONDITION(handler == NULL 
-            || handler->statement_kind == NULL, "Invalid tree kind %s", ast_print_node_type(ASTKind(statement)));
-
-    return (handler->statement_kind)(statement);
+    return handler;
 }
 
-static statement_kind_t kind_of_son_1(AST a)
+static statement_order_class_t statement_get_order_class(AST statement)
 {
-    return statement_get_kind(ASTSon1(a));
+    build_scope_statement_handler_t *handler
+        = statement_get_statement_handler(statement);
+
+    ERROR_CONDITION(handler == NULL || handler->get_order_class == NULL,
+                    "Invalid statement order class %s",
+                    ast_print_node_type(ASTKind(statement)));
+
+    return (handler->get_order_class)(statement);
 }
 
-static char statement_is_executable(AST statement)
+static statement_order_class_t get_soc_from_son_1(AST statement)
 {
-    statement_kind_t k = statement_get_kind(statement);
-    return (k == STMT_KIND_EXECUTABLE || k == STMT_KIND_BOTH);
+    return statement_get_order_class(ASTSon1(statement));
 }
 
-static char statement_is_nonexecutable(AST statement)
+static char statement_constraint_checker_update_order(
+    statement_constraint_checker_t *order_tracker, AST stmt)
 {
-    statement_kind_t k = statement_get_kind(statement);
-    return (k == STMT_KIND_NONEXECUTABLE || k == STMT_KIND_BOTH);
+    statement_order_class_t stmt_order_class = statement_get_order_class(stmt);
+
+    const statement_order_class_t *current_order_class
+        = order_tracker->current_order_class;
+    while (current_order_class < statement_order_end)
+    {
+        DEBUG_CODE()
+        {
+            fprintf(stderr,
+                    "BUILDSCOPE: Checking order of statement %s (%s) against order %zd (%s)\n",
+                    ast_print_node_type(ASTKind(stmt)),
+                    statement_order_class_print(stmt_order_class),
+                    current_order_class - statement_order,
+                    statement_order_class_print(*current_order_class));
+        }
+        if (*current_order_class & stmt_order_class)
+        {
+            if (order_tracker->current_order_class != current_order_class)
+            {
+                DEBUG_CODE()
+                {
+                    fprintf(stderr,
+                            "BUILDSCOPE: Order updated to %zd (%s)\n",
+                            current_order_class - statement_order,
+                            statement_order_class_print(*current_order_class));
+                }
+                order_tracker->current_order_class = current_order_class;
+            }
+            else
+            {
+                DEBUG_CODE()
+                {
+                    fprintf(stderr, "BUILDSCOPE: Order unchanged\n");
+                }
+            }
+            return 1;
+        }
+        current_order_class++;
+    }
+    return 0;
 }
 
 void fortran_build_scope_statement(AST statement, const decl_context_t* decl_context, nodecl_t* nodecl_output)
 {
-    init_statement_array();
-
     DEBUG_CODE()
     {
         fprintf(stderr, "=== [%s] Statement ===\n", ast_location(statement));
     }
 
-    build_scope_statement_handler_t key = { .ast_kind = ASTKind(statement) };
-    build_scope_statement_handler_t *handler = NULL;
+    build_scope_statement_handler_t *handler = statement_get_statement_handler(statement);
 
-    handler = (build_scope_statement_handler_t*)bsearch(&key, build_scope_statement_function, 
-            sizeof(build_scope_statement_function) / sizeof(build_scope_statement_function[0]),
-            sizeof(build_scope_statement_function[0]),
-            build_scope_statement_function_compare);
     if (handler == NULL
             || handler->handler == NULL)
     {
@@ -4610,6 +4804,7 @@ static void build_scope_block_construct(AST a,
 
     AST block = ASTSon1(a);
     nodecl_t nodecl_body = nodecl_null();
+    // FIXME: We should enforce the order of the statements within a block construct.
     fortran_build_scope_statement(block, new_context, &nodecl_body);
 
     *nodecl_output =
@@ -6765,6 +6960,11 @@ static void build_scope_if_construct(AST a, const decl_context_t* decl_context, 
 
 static void build_scope_implicit_stmt(AST a, const decl_context_t* decl_context, nodecl_t* nodecl_output UNUSED_PARAMETER)
 {
+    // We handle AST_IMPLICIT_STATEMENT and AST_IMPLICIT_NONE_STATEMENT here.
+    ERROR_CONDITION(ASTKind(a) != AST_IMPLICIT_STATEMENT
+                        && ASTKind(a) != AST_IMPLICIT_NONE_STATEMENT,
+                    "Invalid node",
+                    0);
     AST implicit_spec_list = ASTSon0(a);
     if (implicit_spec_list == NULL)
     {
