@@ -81,10 +81,10 @@ static void gather_vla_symbol_type(TL::Type t,
         gather_vla_symbol_type(t.array_element(), extra_symbols);
 
         Nodecl::NodeclBase size = t.array_get_size();
-        if (size.is<Nodecl::Symbol>()
-                && size.get_symbol().is_saved_expression())
+        if (size.no_conv().is<Nodecl::Symbol>()
+                && size.no_conv().get_symbol().is_saved_expression())
         {
-            extra_symbols.insert(size.get_symbol());
+            extra_symbols.insert(size.no_conv().get_symbol());
         }
     }
     else if (t.is_pointer())

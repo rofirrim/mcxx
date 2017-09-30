@@ -586,10 +586,10 @@ namespace TL { namespace Nanox {
         {
             Nodecl::NodeclBase array_size = t.array_get_size();
 
-            if (array_size.is<Nodecl::Symbol>()
-                    && array_size.get_symbol().is_saved_expression())
+            if (array_size.no_conv().is<Nodecl::Symbol>()
+                    && array_size.no_conv().get_symbol().is_saved_expression())
             {
-                OutlineDataItem& item = _outline_info.get_entity_for_symbol(array_size.get_symbol());
+                OutlineDataItem& item = _outline_info.get_entity_for_symbol(array_size.no_conv().get_symbol());
                 _outline_info.move_at_beginning(item);
             }
 
@@ -702,8 +702,8 @@ namespace TL { namespace Nanox {
                     // We can reach here for assumed size arrays
                 }
             }
-            else if (lower.is<Nodecl::Symbol>()
-                    && lower.get_symbol().is_saved_expression())
+            else if (lower.no_conv().is<Nodecl::Symbol>()
+                    && lower.no_conv().get_symbol().is_saved_expression())
             {
                 // /* This is not needed in Fortran */
                 // OutlineDataItem& item = _outline_info.get_entity_for_symbol(lower.get_symbol());
@@ -779,8 +779,8 @@ namespace TL { namespace Nanox {
                     }
                 }
             }
-            else if (upper.is<Nodecl::Symbol>()
-                    && upper.get_symbol().is_saved_expression())
+            else if (upper.no_conv().is<Nodecl::Symbol>()
+                    && upper.no_conv().get_symbol().is_saved_expression())
             {
                 // /* This is not needed in Fortran */
                 // OutlineDataItem& item = _outline_info.get_entity_for_symbol(upper.get_symbol());

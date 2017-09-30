@@ -331,11 +331,11 @@ namespace Vectorization
                 = element_type.array_get_size();
 
             // If VLA, get the actual size
-            if (dimension_size_node.is<Nodecl::Symbol>()
-                && dimension_size_node.get_symbol().is_saved_expression())
+            if (dimension_size_node.no_conv().is<Nodecl::Symbol>()
+                && dimension_size_node.no_conv().get_symbol().is_saved_expression())
             {
                 dimension_size_node
-                    = dimension_size_node.get_symbol().get_value().no_conv();
+                    = dimension_size_node.no_conv().get_symbol().get_value().no_conv();
             }
 
             int dimension_size = -1;

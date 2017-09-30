@@ -60,6 +60,10 @@ void add_extra_mapping_for_dimension(Nodecl::NodeclBase vla_var,
                                      Nodecl::Utils::SimpleSymbolMap &symbol_map,
                                      TL::ObjectList<TL::Symbol> &new_vlas)
 {
+    if (vla_var.is_null())
+        return;
+
+    vla_var = vla_var.no_conv();
     if (vla_var.is<Nodecl::Symbol>()
         && vla_var.get_symbol().is_saved_expression()
         // Not mapped already

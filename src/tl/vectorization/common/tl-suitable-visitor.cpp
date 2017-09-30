@@ -62,9 +62,9 @@ bool SuitableVisitor::is_suitable_expression(Nodecl::NodeclBase n)
                                                          n))
         result = true;
 
-    if (!result && n.is<Nodecl::Symbol>())
+    if (!result && n.no_conv().is<Nodecl::Symbol>())
     {
-        TL::Symbol tl_sym = n.as<Nodecl::Symbol>().get_symbol();
+        TL::Symbol tl_sym = n.no_conv().as<Nodecl::Symbol>().get_symbol();
         // VLA dimension
         if (tl_sym.is_saved_expression())
         {

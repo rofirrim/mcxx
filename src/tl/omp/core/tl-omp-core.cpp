@@ -776,10 +776,10 @@ namespace TL { namespace OpenMP {
                         t.array_get_bounds(lower, upper);
 
                         if (!lower.is_null()
-                                && lower.is<Nodecl::Symbol>()
-                                && lower.get_symbol().is_saved_expression())
+                                && lower.no_conv().is<Nodecl::Symbol>()
+                                && lower.no_conv().get_symbol().is_saved_expression())
                         {
-                            TL::Symbol sym(lower.get_symbol());
+                            TL::Symbol sym(lower.no_conv().get_symbol());
                             if (is_local_to_current_function(sym))
                             {
                                 symbols.insert(sym);
@@ -787,10 +787,10 @@ namespace TL { namespace OpenMP {
                         }
 
                         if (!upper.is_null()
-                                && upper.is<Nodecl::Symbol>()
-                                && upper.get_symbol().is_saved_expression())
+                                && upper.no_conv().is<Nodecl::Symbol>()
+                                && upper.no_conv().get_symbol().is_saved_expression())
                         {
-                            TL::Symbol sym(upper.get_symbol());
+                            TL::Symbol sym(upper.no_conv().get_symbol());
                             if (is_local_to_current_function(sym))
                             {
                                 symbols.insert(sym);
@@ -802,8 +802,8 @@ namespace TL { namespace OpenMP {
                         Nodecl::NodeclBase size = t.array_get_size();
 
                         if (!size.is_null()
-                                && size.is<Nodecl::Symbol>()
-                                && size.get_symbol().is_saved_expression())
+                                && size.no_conv().is<Nodecl::Symbol>()
+                                && size.no_conv().get_symbol().is_saved_expression())
                         {
                             TL::Symbol sym(size.get_symbol());
                             if (is_local_to_current_function(sym))

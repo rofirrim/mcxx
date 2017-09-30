@@ -1036,17 +1036,17 @@ namespace TL { namespace Nanox {
                         t.array_get_bounds(lower, upper);
 
                         if (!lower.is_null()
-                                && lower.is<Nodecl::Symbol>()
-                                && lower.get_symbol().is_saved_expression())
+                                && lower.no_conv().is<Nodecl::Symbol>()
+                                && lower.no_conv().get_symbol().is_saved_expression())
                         {
-                            new_private_saved_expression_if_needed(lower.get_symbol());
+                            new_private_saved_expression_if_needed(lower.no_conv().get_symbol());
                         }
 
                         if (!upper.is_null()
-                                && upper.is<Nodecl::Symbol>()
-                                && upper.get_symbol().is_saved_expression())
+                                && upper.no_conv().is<Nodecl::Symbol>()
+                                && upper.no_conv().get_symbol().is_saved_expression())
                         {
-                            new_private_saved_expression_if_needed(upper.get_symbol());
+                            new_private_saved_expression_if_needed(upper.no_conv().get_symbol());
                         }
                     }
                     else if (IS_C_LANGUAGE
@@ -1055,10 +1055,10 @@ namespace TL { namespace Nanox {
                         Nodecl::NodeclBase size;
                         size = t.array_get_size();
 
-                        if (size.is<Nodecl::Symbol>()
-                                && size.get_symbol().is_saved_expression())
+                        if (size.no_conv().is<Nodecl::Symbol>()
+                                && size.no_conv().get_symbol().is_saved_expression())
                         {
-                            new_private_saved_expression_if_needed(size.get_symbol());
+                            new_private_saved_expression_if_needed(size.no_conv().get_symbol());
                         }
                     }
                     else

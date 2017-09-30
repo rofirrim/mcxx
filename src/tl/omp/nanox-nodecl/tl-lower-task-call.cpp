@@ -391,10 +391,10 @@ static void handle_nonconstant_value_dimensions(TL::Type t,
         handle_nonconstant_value_dimensions(t.array_element(), new_decl_context, symbol_map, param_sym_to_arg_sym, stmt_initializations);
         Nodecl::NodeclBase array_size = t.array_get_size();
         if (!array_size.is_null()
-                && array_size.is<Nodecl::Symbol>()
-                && array_size.get_symbol().is_saved_expression())
+                && array_size.no_conv().is<Nodecl::Symbol>()
+                && array_size.no_conv().get_symbol().is_saved_expression())
         {
-            TL::Symbol old_vla_dim = array_size.as<Nodecl::Symbol>().get_symbol();
+            TL::Symbol old_vla_dim = array_size.no_conv().as<Nodecl::Symbol>().get_symbol();
             const char* vla_name = NULL;
             uniquestr_sprintf(&vla_name, "mcc_vla_%d", get_vla_counter());
 
@@ -1097,10 +1097,10 @@ static void handle_save_expressions(const decl_context_t* function_context,
             Nodecl::NodeclBase& tree(args[i].tree);
 
             if (!tree.is_null()
-                    && tree.is<Nodecl::Symbol>()
-                    && tree.get_symbol().is_saved_expression())
+                    && tree.no_conv().is<Nodecl::Symbol>()
+                    && tree.no_conv().get_symbol().is_saved_expression())
             {
-                scope_entry_t* orig_save_expression = tree.get_symbol().get_internal_symbol();
+                scope_entry_t* orig_save_expression = tree.no_conv().get_symbol().get_internal_symbol();
 
                 scope_entry_t* new_save_expression
                     = new_symbol(function_context,

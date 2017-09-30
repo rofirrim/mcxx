@@ -4436,8 +4436,8 @@ namespace TL { namespace Nanos6 {
 
     bool TaskProperties::is_saved_expression(Nodecl::NodeclBase n)
     {
-        return (n.is<Nodecl::Symbol>()
-                && n.get_symbol().is_saved_expression());
+        return (n.no_conv().is<Nodecl::Symbol>()
+                && n.no_conv().get_symbol().is_saved_expression());
     }
 
     bool TaskProperties::is_taskloop() const

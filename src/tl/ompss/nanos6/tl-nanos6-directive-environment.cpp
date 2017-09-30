@@ -426,10 +426,10 @@ namespace TL { namespace Nanos6 {
 
     void DirectiveEnvironment::handle_array_bound(Nodecl::NodeclBase n)
     {
-        if (n.is<Nodecl::Symbol>()
-                && n.get_symbol().is_saved_expression())
+        if (n.no_conv().is<Nodecl::Symbol>()
+                && n.no_conv().get_symbol().is_saved_expression())
         {
-            captured_value.insert(n.get_symbol());
+            captured_value.insert(n.no_conv().get_symbol());
         }
     }
 
