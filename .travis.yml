@@ -6,14 +6,19 @@ compiler:
     - gcc
 os:
     - linux
+addons:
+  apt:
+    sources:
+    - ubuntu-toolchain-r-test
+    packages:
+    - gcc-6
+    - g++-6
 before_install:
     - wget -O - https://rofi.roger-ferrer.org/apt/mirror/apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
     - sudo add-apt-repository -s 'deb [arch=amd64] https://rofi.roger-ferrer.org/apt/mirror/apt.llvm.org/trusty llvm-toolchain-trusty-4.0 main'
-    - sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-    - sudo apt-get update -qq
-    - sudo apt-get install -qq -y gcc-6 g++-6 gfortran-6 flex bison gperf libsqlite3-dev clang-4.0 llvm-4.0-dev
     - ./scripts/install-nanox.sh
 script:
+    - "export CC=gcc-6 CXX=g++-6"
     - "autoreconf -fiv &&
     ./configure CC=\"ccache gcc-6\" CXX=\"ccache g++-6\" GFORTRAN=gfortran-6 FC=gfortran-6 LLVM_CONFIG=\"/usr/bin/llvm-config-4.0\" --prefix=$HOME/mcxx-install --enable-fortran-llvm-codegen --enable-ompss --with-nanox=$HOME/nanox-install &&
     make -j$(nproc) &&
