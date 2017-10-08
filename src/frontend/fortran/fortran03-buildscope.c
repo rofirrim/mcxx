@@ -1171,17 +1171,17 @@ static char statement_constraint_checker_check_statement(
     ERROR_CONDITION(ASTKind(stmt) == AST_AMBIGUITY, "Ambiguity nodes are not allowed here", 0);
 
     if (!(order_tracker->allowed_statement)(order_tracker, stmt, decl_context))
-        return false;
+        return 0;
 
     if (!statement_constraint_checker_update_order(order_tracker, stmt))
     {
         error_printf_at(
             ast_get_locus(stmt),
             "statement is incorrectly located within the program unit\n");
-        return false;
+        return 0;
     }
 
-    return true;
+    return 1;
 }
 
 static char allow_all_statements(
@@ -1214,10 +1214,10 @@ static char module_specification_part_allowed_statements(
         error_printf_at(ast_get_locus(a),
                         "this statement is not allowed in the specification "
                         "part of a MODULE\n");
-        return false;
+        return 0;
     }
 
-    return true;
+    return 1;
 }
 
 static char internal_subprogram_allowed_statements(
@@ -1232,10 +1232,63 @@ static char internal_subprogram_allowed_statements(
         error_printf_at(
             ast_get_locus(a),
             "an ENTRY statement is not allowed in an internal subprogram\n");
-        return false;
+        return 0;
     }
 
-    return true;
+    return 1;
+}
+
+static char executable_construct_allowed_statements(
+    statement_constraint_checker_t *checker UNUSED_PARAMETER,
+    AST a,
+    const decl_context_t *decl_context UNUSED_PARAMETER)
+{
+    // All executable statements are allowed but ENTRY.
+    statement_order_class_t order_class = statement_get_order_class(a);
+    if (order_class == SOC_ENTRY)
+    {
+        error_printf_at(
+            ast_get_locus(a),
+            "an ENTRY statement is not allowed within an executable construct\n");
+        return 0;
+    }
+    else if (!(order_class
+               & (SOC_EVERYWHERE | SOC_FORMAT | SOC_DATA | SOC_EXECUTABLE)))
+    {
+        error_printf_at(
+            ast_get_locus(a),
+            "this statement is not allowed within an executable construct\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static char block_construct_allowed_statements(
+    statement_constraint_checker_t *checker UNUSED_PARAMETER,
+    AST a,
+    const decl_context_t *decl_context UNUSED_PARAMETER)
+{
+    if (ASTKind(a) == AST_LABELED_STATEMENT)
+        a = ASTSon1(a);
+    
+    switch (ASTKind(a))
+    {
+        case AST_COMMON_STATEMENT:
+        case AST_EQUIVALENCE_STATEMENT:
+        case AST_IMPLICIT_STATEMENT:
+        case AST_INTENT_STATEMENT:
+        case AST_NAMELIST_STATEMENT:
+        case AST_OPTIONAL_STATEMENT:
+        case AST_STATEMENT_FUNCTION_STATEMENT:
+        case AST_VALUE_STATEMENT:
+            error_printf_at(ast_get_locus(a), "invalid statement within BLOCK construct");
+            return 0;
+        default:
+            return 1;
+    }
+
+    return 1;
 }
 
 static char block_data_allowed_statements(
@@ -1256,7 +1309,7 @@ static char block_data_allowed_statements(
             error_printf_at(
                 ast_get_locus(a),
                 "this statement is not allowed in a BLOCK DATA program unit\n");
-            return false;
+            return 0;
         case AST_DERIVED_TYPE_DEF:
         case AST_ASYNCHRONOUS_STATEMENT:
         case AST_BIND_STATEMENT:
@@ -1275,7 +1328,7 @@ static char block_data_allowed_statements(
         case AST_USE_ONLY_STATEMENT:
         case AST_VOLATILE_STATEMENT:
         case AST_DECLARATION_STATEMENT:
-            return true;
+            return 1;
     }
 }
 
@@ -4889,26 +4942,50 @@ static void build_scope_bind_stmt(AST a,
 
 }
 
+static void build_scope_construct_statements(AST a, const decl_context_t* decl_context, nodecl_t* nodecl_output,
+        statement_constraint_checker_t *constraint_checker)
+{
+    AST it;
+    AST list = ASTSon0(a);
+
+    nodecl_t nodecl_list = nodecl_null();
+    for_each_element(list, it)
+    {
+        AST statement = ASTSon1(it);
+
+        if (!statement_constraint_checker_check_statement(
+                constraint_checker, statement, decl_context))
+            continue;
+
+        nodecl_t nodecl_statement = nodecl_null();
+        fortran_build_scope_statement(statement, decl_context, &nodecl_statement);
+        nodecl_list = nodecl_concat_lists(nodecl_list, nodecl_statement);
+    }
+
+    // Do not return a list here, it is already a list!
+    *nodecl_output = nodecl_list;
+}
+
 static void build_scope_block_construct(AST a, 
         const decl_context_t* decl_context, 
         nodecl_t* nodecl_output)
 {
-    const decl_context_t* new_context = fortran_new_block_context(decl_context);
+    const decl_context_t *new_context = fortran_new_block_context(decl_context);
 
     AST block = ASTSon1(a);
     nodecl_t nodecl_body = nodecl_null();
-    // FIXME: We should enforce the order of the statements within a block construct.
-    fortran_build_scope_statement(block, new_context, &nodecl_body);
 
-    *nodecl_output =
-        nodecl_make_list_1(
-                nodecl_make_context(
-                    nodecl_make_list_1(
-                        nodecl_make_compound_statement(nodecl_body, nodecl_null(),
-                            ast_get_locus(a))),
-                    new_context,
-                    ast_get_locus(a)
-                    ));
+    statement_constraint_checker_t constraint_checker
+        = statement_constraint_checker_init(block_construct_allowed_statements);
+
+    build_scope_construct_statements(
+        block, new_context, &nodecl_body, &constraint_checker);
+
+    *nodecl_output = nodecl_make_list_1(
+        nodecl_make_context(nodecl_make_list_1(nodecl_make_compound_statement(
+                                nodecl_body, nodecl_null(), ast_get_locus(a))),
+                            new_context,
+                            ast_get_locus(a)));
 }
 
 static void build_scope_case_construct(AST a, const decl_context_t* decl_context, nodecl_t* nodecl_output)
@@ -5018,22 +5095,12 @@ static void build_scope_default_statement(AST a, const decl_context_t* decl_cont
 
 static void build_scope_compound_statement(AST a, const decl_context_t* decl_context, nodecl_t* nodecl_output)
 {
-    AST it;
+    statement_constraint_checker_t constraint_checker
+        = statement_constraint_checker_init(
+            executable_construct_allowed_statements);
 
-    AST list = ASTSon0(a);
-
-    nodecl_t nodecl_list = nodecl_null();
-    for_each_element(list, it)
-    {
-        AST statement = ASTSon1(it);
-
-        nodecl_t nodecl_statement = nodecl_null();
-        fortran_build_scope_statement(statement, decl_context, &nodecl_statement);
-        nodecl_list = nodecl_concat_lists(nodecl_list, nodecl_statement);
-    }
-
-    // Do not return a list here, it is already a list!
-    *nodecl_output = nodecl_list;
+    build_scope_construct_statements(
+        a, decl_context, nodecl_output, &constraint_checker);
 }
 
 static void build_scope_close_stmt(AST a, const decl_context_t* decl_context, nodecl_t* nodecl_output)
