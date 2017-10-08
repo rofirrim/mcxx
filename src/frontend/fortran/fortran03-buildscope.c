@@ -1168,6 +1168,11 @@ static char statement_constraint_checker_check_statement(
     AST stmt,
     const decl_context_t *decl_context)
 {
+    ERROR_CONDITION(ASTKind(stmt) == AST_AMBIGUITY, "Ambiguity nodes are not allowed here", 0);
+
+    if (!(order_tracker->allowed_statement)(order_tracker, stmt, decl_context))
+        return false;
+
     if (!statement_constraint_checker_update_order(order_tracker, stmt))
     {
         error_printf_at(
@@ -1176,8 +1181,7 @@ static char statement_constraint_checker_check_statement(
         return false;
     }
 
-    return (order_tracker->allowed_statement)(
-        order_tracker, stmt, decl_context);
+    return true;
 }
 
 static char allow_all_statements(
@@ -1186,6 +1190,93 @@ static char allow_all_statements(
     const decl_context_t *decl_context UNUSED_PARAMETER)
 {
     return 1;
+}
+
+static statement_order_class_t statement_get_order_class(AST statement);
+
+static char module_specification_part_allowed_statements(
+    statement_constraint_checker_t *checker UNUSED_PARAMETER,
+    AST a,
+    const decl_context_t *decl_context UNUSED_PARAMETER)
+{
+    // Only specification statements are allowed which means no SOC_EXECUTABLE.
+    // But FORMAT, ENTRY and statement function statement are not allowed
+    // either.
+    statement_order_class_t order_class = statement_get_order_class(a);
+    if (order_class == SOC_EXECUTABLE || order_class == SOC_ENTRY
+        || order_class == SOC_FORMAT
+        // There is no order class for statement function statements
+        // so make sure one is not hidden under a labeled statement.
+        || ASTKind(a) == AST_STATEMENT_FUNCTION_STATEMENT
+        || (ASTKind(a) == AST_LABELED_STATEMENT
+            && ASTKind(ASTSon1(a)) == AST_STATEMENT_FUNCTION_STATEMENT))
+    {
+        error_printf_at(ast_get_locus(a),
+                        "this statement is not allowed in the specification "
+                        "part of a MODULE\n");
+        return false;
+    }
+
+    return true;
+}
+
+static char internal_subprogram_allowed_statements(
+    statement_constraint_checker_t *checker UNUSED_PARAMETER,
+    AST a,
+    const decl_context_t *decl_context UNUSED_PARAMETER)
+{
+    // All statements are allowed but ENTRY.
+    statement_order_class_t order_class = statement_get_order_class(a);
+    if (order_class == SOC_ENTRY)
+    {
+        error_printf_at(
+            ast_get_locus(a),
+            "an ENTRY statement is not allowed in an internal subprogram\n");
+        return false;
+    }
+
+    return true;
+}
+
+static char block_data_allowed_statements(
+    statement_constraint_checker_t *checker UNUSED_PARAMETER,
+    AST a,
+    const decl_context_t *decl_context UNUSED_PARAMETER)
+{
+    // A block-data specification-part shall contain only definitions of
+    // derived-type definitions and ASYNCHRONOUS, BIND, COMMON, DATA,
+    // DIMENSION, EQUIVALENCE, IMPLICIT, INTRINSIC, PARAMETER, POINTER, SAVE,
+    // TARGET, USE, VOLATILE, and type declaration statements.
+    if (ASTKind(a) == AST_LABELED_STATEMENT)
+        a = ASTSon1(a);
+
+    switch (ASTKind(a))
+    {
+        default:
+            error_printf_at(
+                ast_get_locus(a),
+                "this statement is not allowed in a BLOCK DATA program unit\n");
+            return false;
+        case AST_DERIVED_TYPE_DEF:
+        case AST_ASYNCHRONOUS_STATEMENT:
+        case AST_BIND_STATEMENT:
+        case AST_COMMON_STATEMENT:
+        case AST_DATA_STATEMENT:
+        case AST_DIMENSION_STATEMENT:
+        case AST_EQUIVALENCE_STATEMENT:
+        case AST_IMPLICIT_NONE_STATEMENT:
+        case AST_IMPLICIT_STATEMENT:
+        case AST_INTRINSIC_STATEMENT:
+        case AST_PARAMETER_STATEMENT:
+        case AST_POINTER_STATEMENT:
+        case AST_SAVE_STATEMENT:
+        case AST_TARGET_STATEMENT:
+        case AST_USE_STATEMENT:
+        case AST_USE_ONLY_STATEMENT:
+        case AST_VOLATILE_STATEMENT:
+        case AST_DECLARATION_STATEMENT:
+            return true;
+    }
 }
 
 static void build_scope_program_unit_body(
@@ -1570,7 +1661,7 @@ static void build_scope_module_program_unit(AST program_unit,
         AST internal_subprograms = ASTSon1(module_body);
 
         statement_constraint_checker_t constraint_checker
-            = statement_constraint_checker_init(allow_all_statements);
+            = statement_constraint_checker_init(module_specification_part_allowed_statements);
         build_scope_program_unit_body(statement_seq,
                                       internal_subprograms,
                                       NULL,
@@ -1682,7 +1773,7 @@ static void build_scope_block_data_program_unit(AST program_unit,
         AST internal_subprograms = NULL;
 
         statement_constraint_checker_t constraint_checker
-            = statement_constraint_checker_init(allow_all_statements);
+            = statement_constraint_checker_init(block_data_allowed_statements);
         build_scope_program_unit_body(statement_seq,
                                       internal_subprograms,
                                       NULL,
@@ -2367,8 +2458,6 @@ static scope_entry_t* new_entry_symbol(const decl_context_t* decl_context,
 
 static void build_scope_ambiguity_statement(AST ambig_stmt, const decl_context_t* decl_context, char is_declaration);
 
-static statement_order_class_t statement_get_order_class(AST statement);
-
 static void build_scope_program_unit_body_declarations(
         statement_constraint_checker_t *constraint_checker,
         AST program_unit_stmts,
@@ -2636,8 +2725,6 @@ static scope_entry_t* build_scope_internal_subprogram(
         internal_subprograms_info->internal_subprograms
             = n_internal_subprograms;
         internal_subprograms_info->locus = ast_get_locus(program_body);
-        internal_subprograms_info->constraint_checker
-            = statement_constraint_checker_init(allow_all_statements);
 
         scope_entry_t* enclosing_sym = decl_context->current_scope->related_entry;
 
@@ -2645,11 +2732,17 @@ static scope_entry_t* build_scope_internal_subprogram(
         if (enclosing_sym != NULL
                 && enclosing_sym->kind == SK_MODULE)
         {
+            internal_subprograms_info->constraint_checker
+                = statement_constraint_checker_init(allow_all_statements);
+
             symbol_entity_specs_set_is_module_procedure(new_entry, 1);
             remove_not_fully_defined_symbol(decl_context, new_entry);
         }
         else
         {
+            internal_subprograms_info->constraint_checker
+                = statement_constraint_checker_init(internal_subprogram_allowed_statements);
+
             symbol_entity_specs_set_is_nested_function(new_entry, 1);
         }
 
