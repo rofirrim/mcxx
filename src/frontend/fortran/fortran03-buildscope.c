@@ -1866,7 +1866,6 @@ static void build_global_program_unit(AST program_unit)
 }
 
 
-
 static type_t* fortran_gather_type_from_declaration_type_spec_(AST a, 
         const decl_context_t* decl_context, AST *character_length_out);
 
@@ -1874,6 +1873,85 @@ type_t* fortran_gather_type_from_declaration_type_spec(AST a, const decl_context
 {
     return fortran_gather_type_from_declaration_type_spec_(a, decl_context, character_length_out);
 }
+
+static type_t *compute_character_length_type(AST character_length,
+                                             type_t *character_type,
+                                             const decl_context_t *decl_context)
+{
+    ERROR_CONDITION(!fortran_is_character_type(character_type),
+                    "This must be a CHARACTER type",
+                    0);
+
+    // FIXME - This is duplicating the logic in delayed_compute_character_length
+    nodecl_t nodecl_len = nodecl_null();
+    char is_star = 0;
+    char is_colon = 0;
+
+    if (ASTKind(character_length) == AST_SYMBOL
+        && strcmp(ASTText(character_length), "*") == 0)
+    {
+        is_star = 1;
+    }
+    else if (ASTKind(character_length) == AST_SYMBOL
+             && strcmp(ASTText(character_length), ":") == 0)
+    {
+        is_colon = 1;
+    }
+    else
+    {
+        fortran_check_expression(character_length, decl_context, &nodecl_len);
+    }
+
+    if (is_star)
+    {
+        // No need to do anything because
+        // fortran_gather_type_from_declaration_type_spec_ already returns an
+        // unknown size character array.
+        return character_type;
+    }
+    else if (is_colon)
+    {
+        // Replace the array with one with descriptor.
+        type_t *updated_char_type = get_array_type_bounds_with_descriptor(
+            array_type_get_element_type(character_type),
+            nodecl_null(),
+            nodecl_null(),
+            decl_context);
+        return updated_char_type;
+    }
+    else if (nodecl_is_err_expr(nodecl_len))
+    {
+        return get_error_type();
+    }
+    else
+    {
+        nodecl_len = fortran_expression_as_value(nodecl_len);
+        nodecl_t lower_bound = nodecl_make_integer_literal(
+            get_signed_int_type(),
+            const_value_get_one(type_get_size(get_signed_int_type()), 1),
+            nodecl_get_locus(nodecl_len));
+        return get_array_type_bounds(
+            array_type_get_element_type(character_type),
+            lower_bound,
+            nodecl_len,
+            decl_context);
+    }
+}
+
+static type_t *fortran_gather_type_from_type_spec(
+    AST a, const decl_context_t *decl_context)
+{
+    AST character_length_out = NULL;
+    type_t *basic_type = fortran_gather_type_from_declaration_type_spec_(
+        a, decl_context, &character_length_out);
+    if (fortran_is_character_type(basic_type) && character_length_out != NULL)
+    {
+        basic_type = compute_character_length_type(
+            character_length_out, basic_type, decl_context);
+    }
+    return basic_type;
+}
+
 
 static type_t* get_derived_type_name(AST a, const decl_context_t* decl_context);
 
@@ -4689,10 +4767,11 @@ static void build_scope_allocate_stmt(AST a, const decl_context_t* decl_context,
     AST allocation_list = ASTSon1(a);
     AST alloc_opt_list = ASTSon2(a);
 
+    nodecl_t nodecl_type = nodecl_null();
     if (type_spec != NULL)
     {
-        sorry_printf_at(ast_get_locus(type_spec),
-                "type-specifier not supported in ALLOCATE statement\n");
+        type_t* allocate_type = fortran_gather_type_from_type_spec(type_spec, decl_context);
+        nodecl_type = nodecl_make_type(allocate_type, ast_get_locus(type_spec));
     }
 
     nodecl_t nodecl_allocate_list = nodecl_null();
@@ -4754,6 +4833,7 @@ static void build_scope_allocate_stmt(AST a, const decl_context_t* decl_context,
     *nodecl_output = nodecl_make_list_1(
             nodecl_make_fortran_allocate_statement(nodecl_allocate_list, 
                 nodecl_opt_value,
+                nodecl_type,
                 ast_get_locus(a)));
 }
 
