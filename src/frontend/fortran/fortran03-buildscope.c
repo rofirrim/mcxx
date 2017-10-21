@@ -52,6 +52,221 @@
 #include <ctype.h>
 #include "red_black_tree.h"
 
+typedef
+enum build_scope_delay_category_tag
+{
+    DELAY_AFTER_USE_STATEMENT,
+    DELAY_AFTER_IMPLICIT_STATEMENT,
+    DELAY_AFTER_DECLARATIONS,
+    DELAY_AFTER_PROGRAM_UNIT,
+    // Used for sizing
+    DELAY_NUM_CATEGORIES,
+} build_scope_delay_category_t;
+
+typedef void build_scope_delay_fun_t(void*, nodecl_t*);
+
+typedef
+struct build_scope_delay_info_tag
+{
+    build_scope_delay_fun_t* fun;
+    void *data;
+} build_scope_delay_info_t;
+
+typedef
+struct build_scope_single_category_list_tag
+{
+    int num_delayed;
+    build_scope_delay_info_t* list;
+} build_scope_single_category_list_t;
+
+typedef
+struct build_scope_delay_tag
+{
+    build_scope_single_category_list_t categories[DELAY_NUM_CATEGORIES];
+} build_scope_delay_list_t;
+
+enum { BUILD_SCOPE_DELAY_STACK_MAX = 16 };
+
+int _current_delay_stack_idx = 0;
+static build_scope_delay_list_t* _current_delay_stack[BUILD_SCOPE_DELAY_STACK_MAX];
+
+static void build_scope_delay_list_push(build_scope_delay_list_t* delay_list)
+{
+    ERROR_CONDITION(_current_delay_stack_idx == BUILD_SCOPE_DELAY_STACK_MAX, "Too many delayed scopes", 0);
+    _current_delay_stack[_current_delay_stack_idx] = delay_list;
+    _current_delay_stack_idx++;
+}
+
+static void build_scope_delay_list_pop(void)
+{
+    ERROR_CONDITION(_current_delay_stack_idx == 0, "Empty stack", 0);
+
+    _current_delay_stack[_current_delay_stack_idx - 1] = NULL;
+    _current_delay_stack_idx--;
+}
+
+// FIXME: Use it
+// static void build_scope_delay_list_cleanup(build_scope_delay_list_t* delay_list)
+// {
+//     // Cleanup all what has not been run (not necessarily an error)
+//     // FIXME: There is no way to delete the data pointer of build_scope_delay_info_t
+//     int i;
+//     for (i = 0; i < DELAY_NUM_CATEGORIES; i++)
+//     {
+//         DELETE(delay_list->categories[i].list);
+//         delay_list->categories[i].num_delayed = 0;
+//         delay_list->categories[i].list = NULL;
+//     }
+// }
+
+static build_scope_delay_list_t* build_scope_delay_list_current(void)
+{
+    ERROR_CONDITION(_current_delay_stack_idx == 0, "Empty stack", 0);
+    return _current_delay_stack[_current_delay_stack_idx - 1];
+}
+
+static void build_scope_delay_list_run(
+    build_scope_delay_category_t delay_category,
+    nodecl_t *nodecl_output)
+{
+    build_scope_delay_list_t *delay_list = build_scope_delay_list_current();
+
+    // We work on a copy so we allow the handlers to add delay actions in this
+    // same category if they want.
+    int i;
+    int num_delayed = delay_list->categories[delay_category].num_delayed;
+
+    build_scope_delay_info_t *copy_delayed
+        = NEW_VEC0(build_scope_delay_info_t, num_delayed);
+    memcpy(copy_delayed,
+           delay_list->categories[delay_category].list,
+           sizeof(*copy_delayed) * num_delayed);
+
+    DELETE(delay_list->categories[delay_category].list);
+    delay_list->categories[delay_category].num_delayed = 0;
+    delay_list->categories[delay_category].list = NULL;
+
+    for (i = 0; i < num_delayed; i++)
+    {
+        nodecl_t nodecl_current = nodecl_null();
+        (copy_delayed[i].fun)(copy_delayed[i].data, &nodecl_current);
+
+        if (nodecl_output != NULL)
+        {
+            *nodecl_output
+                = nodecl_concat_lists(*nodecl_output, nodecl_current);
+        }
+        else if (!nodecl_is_null(nodecl_current))
+        {
+            internal_error(
+                "Delayed action generates nodecl but there is no output "
+                "nodecl\n",
+                0);
+        }
+    }
+
+    DELETE(copy_delayed);
+}
+
+static void build_scope_delay_list_add(
+    build_scope_delay_category_t delay_category,
+    build_scope_delay_fun_t *fun,
+    void *data)
+{
+    ERROR_CONDITION(_current_delay_stack_idx == 0, "No active delay list", 0);
+
+    build_scope_delay_info_t new_delayed = { fun, data };
+
+    build_scope_delay_list_t *current_delay_list
+        = _current_delay_stack[_current_delay_stack_idx - 1];
+
+    P_LIST_ADD(current_delay_list->categories[delay_category].list,
+               current_delay_list->categories[delay_category].num_delayed,
+               new_delayed);
+}
+
+typedef char build_scope_delay_list_cmp_fun_t(void *key, void *data);
+
+static void build_scope_delay_list_run_now(
+    build_scope_delay_category_t delay_category,
+    void *key,
+    build_scope_delay_fun_t *fun,
+    build_scope_delay_list_cmp_fun_t *cmp_fun,
+    nodecl_t *nodecl_output)
+{
+    ERROR_CONDITION(_current_delay_stack_idx == 0, "No active delay list", 0);
+    build_scope_delay_list_t *current_delay_list
+        = _current_delay_stack[_current_delay_stack_idx - 1];
+
+    char found = 0;
+    int i;
+    for (i = 0; i < current_delay_list->categories[delay_category].num_delayed
+                && !found;
+         i++)
+    {
+        if (fun == current_delay_list->categories[delay_category].list[i].fun
+            && cmp_fun(
+                   key,
+                   current_delay_list->categories[delay_category].list[i].data))
+        {
+            (current_delay_list->categories[delay_category].list[i].fun)(
+                current_delay_list->categories[delay_category].list[i].data,
+                nodecl_output);
+
+            current_delay_list->categories[delay_category].num_delayed--;
+            for (;
+                 i < current_delay_list->categories[delay_category].num_delayed;
+                 i++)
+            {
+                current_delay_list->categories[delay_category].list[i]
+                    = current_delay_list->categories[delay_category]
+                          .list[i + 1];
+            }
+            found = 1;
+        }
+    }
+
+    ERROR_CONDITION(!found, "Delayed element not found", 0);
+}
+
+static char build_scope_delay_list_remove(
+    build_scope_delay_category_t delay_category,
+    void *key,
+    build_scope_delay_fun_t *fun,
+    build_scope_delay_list_cmp_fun_t *cmp_fun)
+{
+    ERROR_CONDITION(_current_delay_stack_idx == 0, "No active delay list", 0);
+    build_scope_delay_list_t *current_delay_list
+        = _current_delay_stack[_current_delay_stack_idx - 1];
+
+    char found = 0;
+    int i;
+    for (i = 0; i < current_delay_list->categories[delay_category].num_delayed
+                && !found;
+         i++)
+    {
+        if (fun == current_delay_list->categories[delay_category].list[i].fun
+            && cmp_fun(
+                   key,
+                   current_delay_list->categories[delay_category].list[i].data))
+        {
+            current_delay_list->categories[delay_category].num_delayed--;
+            for (;
+                 i < current_delay_list->categories[delay_category].num_delayed;
+                 i++)
+            {
+                current_delay_list->categories[delay_category].list[i]
+                    = current_delay_list->categories[delay_category]
+                          .list[i + 1];
+            }
+            found = 1;
+        }
+    }
+
+    return found;
+}
+
+
 static void unsupported_statement(AST a, const char* name);
 
 static void null_dtor(const void* p UNUSED_PARAMETER) { }
@@ -78,9 +293,19 @@ void fortran_initialize_translation_unit_scope(translation_unit_t* translation_u
 
     translation_unit->module_file_cache = rb_tree_create((int (*)(const void*, const void*))strcasecmp, null_dtor, null_dtor);
 
+    // Some initializations may call functions that
+    // use delayed actions. Create a fake delayed
+    // context for them.
+    // FIXME: We are not running them but we
+    // should clean up the lists at some point.
+    build_scope_delay_list_t delay_list = { };
+    build_scope_delay_list_push(&delay_list);
+
     fortran_init_kinds();
     fortran_init_globals(decl_context);
     fortran_init_intrinsics(decl_context);
+
+    build_scope_delay_list_pop();
 }
 
 static void fortran_init_globals(const decl_context_t* decl_context)
@@ -159,7 +384,6 @@ nodecl_t build_scope_fortran_translation_unit(translation_unit_t* translation_un
     // Technically Fortran does not have a global scope but it is convenient to have one
     const decl_context_t* decl_context = translation_unit->global_decl_context;
 
-
     nodecl_t nodecl_program_units = nodecl_null();
     AST list = ASTSon0(a);
     if (list != NULL)
@@ -231,16 +455,6 @@ static scope_entry_t* get_or_create_special_symbol(const decl_context_t* decl_co
     return unknown_info;
 }
 
-static scope_entry_t* get_untyped_symbols_info(const decl_context_t* decl_context)
-{
-    return get_special_symbol(decl_context, UNIQUESTR_LITERAL(".untyped_symbols"));
-}
-
-static scope_entry_t* get_or_create_untyped_symbols_info(const decl_context_t* decl_context)
-{
-    return get_or_create_special_symbol(decl_context, UNIQUESTR_LITERAL(".untyped_symbols"));
-}
-
 scope_entry_t* fortran_get_data_symbol_info(const decl_context_t* decl_context)
 {
     return get_special_symbol(decl_context, UNIQUESTR_LITERAL(".data"));
@@ -281,295 +495,9 @@ static scope_entry_t* get_or_create_equivalence_symbol_info(const decl_context_t
     return get_or_create_special_symbol(decl_context, UNIQUESTR_LITERAL(".equivalence"));
 }
 
-static scope_entry_t* get_or_create_not_fully_defined_symbol_info(const decl_context_t* decl_context)
-{
-    return get_or_create_special_symbol(decl_context, UNIQUESTR_LITERAL(".not_fully_defined"));
-}
+static void add_delay_check_symbol_needs_type_specifier(
+    const decl_context_t *decl_context, scope_entry_t *entry);
 
-static scope_entry_t* get_not_fully_defined_symbol_info(const decl_context_t* decl_context)
-{
-    return get_special_symbol(decl_context, UNIQUESTR_LITERAL(".not_fully_defined"));
-}
-
-static scope_entry_t* get_or_create_unknown_kind_symbol_info(const decl_context_t* decl_context)
-{
-    return get_or_create_special_symbol(decl_context, UNIQUESTR_LITERAL(".unknown_kind"));
-}
-
-static scope_entry_t* get_unknown_kind_symbol_info(const decl_context_t* decl_context)
-{
-    return get_special_symbol(decl_context, UNIQUESTR_LITERAL(".unknown_kind"));
-}
-
-static scope_entry_t* get_or_create_intent_declared_symbol_info(const decl_context_t* decl_context)
-{
-    return get_or_create_special_symbol(decl_context, UNIQUESTR_LITERAL(".intent_declared"));
-}
-
-static scope_entry_t* get_intent_declared_symbol_info(const decl_context_t* decl_context)
-{
-    return get_special_symbol(decl_context, UNIQUESTR_LITERAL(".intent_declared"));
-}
-
-void add_untyped_symbol(const decl_context_t* decl_context, scope_entry_t* entry)
-{
-    scope_entry_t* unknown_info = get_or_create_untyped_symbols_info(decl_context);
-
-    symbol_entity_specs_insert_related_symbols(unknown_info, entry);
-}
-
-void remove_untyped_symbol(const decl_context_t* decl_context, scope_entry_t* entry)
-{
-    scope_entry_t* unknown_info = get_untyped_symbols_info(decl_context);
-    if (unknown_info == NULL)
-        return;
-
-    symbol_entity_specs_remove_related_symbols(unknown_info, entry);
-}
-
-static void check_untyped_symbols(const decl_context_t* decl_context)
-{
-    scope_entry_t* unknown_info = get_untyped_symbols_info(decl_context);
-    if (unknown_info == NULL)
-        return;
-
-    int i;
-    for (i = 0; i < symbol_entity_specs_get_num_related_symbols(unknown_info); i++)
-    {
-        scope_entry_t* entry = symbol_entity_specs_get_related_symbols_num(unknown_info, i);
-        ERROR_CONDITION(entry->type_information == NULL, "A symbol here should have a void type, not NULL", 0);
-
-        if (!fortran_basic_type_is_implicit_none(entry->type_information))
-        {
-            if (entry->kind == SK_UNDEFINED)
-            {
-                // The user did nothing with that name to let us discover the
-                // exact nature of this symbol so lets assume is a variable
-                entry->kind = SK_VARIABLE;
-                remove_unknown_kind_symbol(decl_context, entry);
-            }
-            continue;
-        }
-
-        error_printf_at(entry->locus, "symbol '%s' has no IMPLICIT type\n",
-                entry->symbol_name);
-    }
-
-    symbol_entity_specs_free_related_symbols(unknown_info);
-}
-
-static void update_untyped_symbols(const decl_context_t* decl_context)
-{
-    scope_entry_t* unknown_info = get_untyped_symbols_info(decl_context);
-    if (unknown_info == NULL)
-        return;
-
-    scope_entry_t* new_untyped[1 + symbol_entity_specs_get_num_related_symbols(unknown_info)];
-    int num_new_untyped = 0;
-
-    int i;
-    for (i = 0; i < symbol_entity_specs_get_num_related_symbols(unknown_info); i++)
-    {
-        scope_entry_t* entry = symbol_entity_specs_get_related_symbols_num(unknown_info, i);
-
-        ERROR_CONDITION(entry->type_information == NULL, "Invalid type for unknown entity '%s'\n", entry->symbol_name);
-
-        ERROR_CONDITION(!symbol_entity_specs_get_is_implicit_basic_type(entry), 
-                "Only those symbols without an explicit type declaration can appear here", 0);
-
-        type_t* implicit_type = get_implicit_type_for_symbol(decl_context, entry->symbol_name);
-
-        entry->type_information = fortran_update_basic_type_with_type(entry->type_information,
-                implicit_type);
-
-        if (!is_implicit_none_type(implicit_type))
-        {
-            DEBUG_CODE()
-            {
-                fprintf(stderr, "BUILDSCOPE: Type of symbol '%s' at '%s' updated to %s\n", 
-                        entry->symbol_name,
-                        locus_to_str(entry->locus),
-                        entry->type_information == NULL ? "<<NULL>>" : print_declarator(entry->type_information));
-            }
-        }
-        else
-        {
-            // We will add them into the untyped set later
-            new_untyped[num_new_untyped] = entry;
-            num_new_untyped++;
-        }
-    }
-
-    // Add the newly defined untyped here
-    for (i = 0; i < num_new_untyped; i++)
-    {
-        add_untyped_symbol(decl_context, new_untyped[i]);
-    }
-}
-
-static void add_not_fully_defined_symbol(const decl_context_t* decl_context, scope_entry_t* entry)
-{
-    scope_entry_t * not_fully_defined = get_or_create_not_fully_defined_symbol_info(decl_context);
-    symbol_entity_specs_add_related_symbols(
-            not_fully_defined,
-            entry);
-}
-
-static void remove_not_fully_defined_symbol(const decl_context_t* decl_context, scope_entry_t* entry)
-{
-    scope_entry_t * not_fully_defined = get_not_fully_defined_symbol_info(decl_context);
-    if (not_fully_defined == NULL)
-        return;
-
-    symbol_entity_specs_remove_related_symbols(
-            not_fully_defined,
-            entry);
-}
-
-static void check_not_fully_defined_symbols(const decl_context_t* decl_context)
-{
-    scope_entry_t * not_fully_defined = get_not_fully_defined_symbol_info(decl_context);
-    if (not_fully_defined == NULL)
-        return;
-
-    int i;
-    for (i = 0; i < symbol_entity_specs_get_num_related_symbols(not_fully_defined); i++)
-    {
-        scope_entry_t* entry = symbol_entity_specs_get_related_symbols_num(not_fully_defined, i);
-
-        if (entry->kind == SK_COMMON)
-        {
-            error_printf_at(entry->locus, "COMMON '%s' does not exist\n",
-                    entry->symbol_name + strlen(".common."));
-        }
-        else if (entry->kind == SK_FUNCTION
-                && symbol_entity_specs_get_is_module_procedure(entry))
-        {
-            error_printf_at(entry->locus, "MODULE PROCEDURE '%s' does not exist\n",
-                    entry->symbol_name);
-        }
-        else if (entry->kind == SK_CLASS)
-        {
-            error_printf_at(entry->locus, "derived type name 'TYPE(%s)' has not been defined\n",
-                    entry->symbol_name);
-        }
-        else
-        {
-            internal_error("Unexpected symbol in not fully defined symbol set %s '%s'",
-                    symbol_kind_name(entry),
-                    entry->symbol_name);
-        }
-    }
-}
-
-void add_unknown_kind_symbol(const decl_context_t* decl_context, scope_entry_t* entry)
-{
-    scope_entry_t * unknown_kind = get_or_create_unknown_kind_symbol_info(decl_context);
-    symbol_entity_specs_insert_related_symbols(
-            unknown_kind,
-            entry);
-}
-
-void remove_unknown_kind_symbol(const decl_context_t* decl_context, scope_entry_t* entry)
-{
-    // Sometimes, we should remove the unknown symbol from more than one scope
-    // Example:
-    // 
-    // MODULE F
-    //      IMPLICIT NONE
-    //      CHARACTER(LEN=10) :: var
-    //      CONTAINS
-    //      SUBROUTINE F()
-    //           IMPLICIT NONE
-    //           WRITE(var, foo)
-    //      END SUBROUTINE F
-    // END MODULE F
-    //
-    // The variable var is contained in two unknown kind sets
-    // This variable is defined in the subroutine body, and must be
-    // removed from the two scopes
-
-    if (decl_context->current_scope != entry->decl_context->current_scope)
-    {
-        if (decl_context->current_scope->contained_in != NULL &&
-                decl_context->current_scope->contained_in->related_entry != NULL)
-        {
-            remove_unknown_kind_symbol(decl_context->current_scope->contained_in->related_entry->related_decl_context, entry);
-        }
-    }
-
-    scope_entry_t * unknown_kind = get_unknown_kind_symbol_info(decl_context);
-    if (unknown_kind == NULL)
-        return;
-
-    symbol_entity_specs_remove_related_symbols(unknown_kind, entry);
-}
-
-void review_unknown_kind_symbol(const decl_context_t* decl_context)
-{
-    scope_entry_t * unknown_kind = get_unknown_kind_symbol_info(decl_context);
-    if (unknown_kind == NULL)
-        return;
-    
-    int i;
-    for (i = 0; i < symbol_entity_specs_get_num_related_symbols(unknown_kind); i++)
-    {
-        scope_entry_t* entry = symbol_entity_specs_get_related_symbols_num(unknown_kind, i);
-        if (entry->kind == SK_UNDEFINED)
-        {
-            entry->kind = SK_VARIABLE;
-        }
-        else 
-        {
-            internal_error("Unexpected symbol in unknown kind symbol set %s '%s'",
-                    symbol_kind_name(entry),
-                    entry->symbol_name);
-        }
-    }
-
-    symbol_entity_specs_free_related_symbols(unknown_kind);
-}
-
-static void add_intent_declared_symbol(const decl_context_t* decl_context, scope_entry_t* entry)
-{
-    scope_entry_t * intent_declared = get_or_create_intent_declared_symbol_info(decl_context);
-    symbol_entity_specs_insert_related_symbols(intent_declared, entry);
-}
-
-static void remove_intent_declared_symbol(const decl_context_t* decl_context, scope_entry_t* entry)
-{
-    scope_entry_t * intent_declared = get_intent_declared_symbol_info(decl_context);
-    if (intent_declared == NULL)
-        return;
-
-    symbol_entity_specs_remove_related_symbols(intent_declared, entry);
-
-}
-static void check_intent_declared_symbols(const decl_context_t* decl_context)
-{
-    scope_entry_t * intent_declared = get_intent_declared_symbol_info(decl_context);
-    if (intent_declared == NULL)
-        return;
-
-    int i;
-    for (i = 0; i < symbol_entity_specs_get_num_related_symbols(intent_declared); i++)
-    {
-        scope_entry_t* entry = symbol_entity_specs_get_related_symbols_num(intent_declared, i);
-        if (!symbol_is_parameter_of_function(entry,
-                    decl_context->current_scope->related_entry))
-        {
-            error_printf_at(entry->locus, "entity '%s' is not a dummy argument\n",
-                    entry->symbol_name);
-        }
-        else
-        {
-            // The symbol 'entry' is a parameter. Did we forget to remove it from this set?
-            internal_error("Unexpected symbol in intent declared symbol set %s '%s'",
-                    symbol_kind_name(entry),
-                    entry->symbol_name);
-        }
-    }
-}
 static scope_entry_t* create_fortran_symbol_for_name_(const decl_context_t* decl_context, 
         AST location, const char* name,
         char no_implicit)
@@ -584,9 +512,9 @@ static scope_entry_t* create_fortran_symbol_for_name_(const decl_context_t* decl
         result->type_information = get_void_type();
     }
 
-    add_untyped_symbol(decl_context, result);
-
+    add_delay_check_symbol_needs_type_specifier(decl_context, result);
     symbol_entity_specs_set_is_implicit_basic_type(result, 1);
+
     result->locus = ast_get_locus(location);
 
     if (decl_context->current_scope->related_entry != NULL
@@ -627,21 +555,31 @@ static scope_entry_t* get_symbol_for_name(const decl_context_t* decl_context,
     return result;
 }
 
-static void build_scope_main_program_unit(AST program_unit, const decl_context_t*
-        program_unit_context, scope_entry_t** program_unit_symbol,
-        nodecl_t* nodecl_output);
-static void build_scope_subroutine_program_unit(AST program_unit,
-        const decl_context_t* program_unit_context, scope_entry_t** program_unit_symbol,
-        nodecl_t* nodecl_output);
-static void build_scope_function_program_unit(AST program_unit, const decl_context_t*
-        program_unit_context, scope_entry_t** program_unit_symbol,
-        nodecl_t* nodecl_output);
-static void build_scope_module_program_unit(AST program_unit, const decl_context_t*
-        program_unit_context, scope_entry_t** program_unit_symbol,
-        nodecl_t* nodecl_output);
-static void build_scope_block_data_program_unit(AST program_unit,
-        const decl_context_t* program_unit_context, scope_entry_t** program_unit_symbol, 
-        nodecl_t* nodecl_output);
+static void build_scope_main_program_unit(
+    AST program_unit,
+    const decl_context_t *decl_context,
+    scope_entry_t **program_unit_symbol,
+    nodecl_t *nodecl_output);
+static void build_scope_subroutine_program_unit(
+    AST program_unit,
+    const decl_context_t *program_unit_context,
+    scope_entry_t **program_unit_symbol,
+    nodecl_t *nodecl_output);
+static void build_scope_function_program_unit(
+    AST program_unit,
+    const decl_context_t *program_unit_context,
+    scope_entry_t **program_unit_symbol,
+    nodecl_t *nodecl_output);
+static void build_scope_module_program_unit(
+    AST program_unit,
+    const decl_context_t *program_unit_context,
+    scope_entry_t **program_unit_symbol,
+    nodecl_t *nodecl_output);
+static void build_scope_block_data_program_unit(
+    AST program_unit,
+    const decl_context_t *program_unit_context,
+    scope_entry_t **program_unit_symbol,
+    nodecl_t *nodecl_output);
 
 static void build_global_program_unit(AST program_unit);
 
@@ -649,202 +587,146 @@ static void handle_opt_value_list(AST io_stmt, AST opt_value_list,
         const decl_context_t* decl_context,
         nodecl_t* nodecl_output);
 
-static void build_scope_program_unit_internal(AST program_unit, 
-        const decl_context_t* decl_context,
-        scope_entry_t** program_unit_symbol,
-        nodecl_t* nodecl_output)
+static void build_scope_program_unit_internal(
+    AST program_unit,
+    const decl_context_t *decl_context,
+    scope_entry_t **program_unit_symbol,
+    nodecl_t *nodecl_output)
 {
-    scope_entry_t* _program_unit_symbol = NULL;
+    scope_entry_t *_program_unit_symbol = NULL;
+
+    build_scope_delay_list_t program_unit_delayed = {};
+    build_scope_delay_list_push(&program_unit_delayed);
 
     switch (ASTKind(program_unit))
     {
         case AST_MAIN_PROGRAM_UNIT:
-            {
-                build_scope_main_program_unit(program_unit, decl_context, &_program_unit_symbol, nodecl_output);
-                break;
-            }
+        {
+            build_scope_main_program_unit(program_unit,
+                                          decl_context,
+                                          &_program_unit_symbol,
+                                          nodecl_output);
+            break;
+        }
         case AST_SUBROUTINE_PROGRAM_UNIT:
-            {
-                build_scope_subroutine_program_unit(program_unit, decl_context, &_program_unit_symbol, nodecl_output);
-                break;
-            }
+        {
+            build_scope_subroutine_program_unit(program_unit,
+                                                decl_context,
+                                                &_program_unit_symbol,
+                                                nodecl_output);
+            break;
+        }
         case AST_FUNCTION_PROGRAM_UNIT:
-            {
-                build_scope_function_program_unit(program_unit, decl_context, &_program_unit_symbol, nodecl_output);
-                break;
-            }
-        case AST_MODULE_PROGRAM_UNIT :
-            {
-                build_scope_module_program_unit(program_unit, decl_context, &_program_unit_symbol, nodecl_output);
-                break;
-            }
+        {
+            build_scope_function_program_unit(program_unit,
+                                              decl_context,
+                                              &_program_unit_symbol,
+                                              nodecl_output);
+            break;
+        }
+        case AST_MODULE_PROGRAM_UNIT:
+        {
+            build_scope_module_program_unit(program_unit,
+                                            decl_context,
+                                            &_program_unit_symbol,
+                                            nodecl_output);
+            break;
+        }
         case AST_BLOCK_DATA_PROGRAM_UNIT:
-            {
-                build_scope_block_data_program_unit(program_unit, decl_context, &_program_unit_symbol, nodecl_output);
-                break;
-            }
+        {
+            build_scope_block_data_program_unit(program_unit,
+                                                decl_context,
+                                                &_program_unit_symbol,
+                                                nodecl_output);
+            break;
+        }
         case AST_GLOBAL_PROGRAM_UNIT:
-            {
-                //  This is a Mercurium extension.
-                //  It does not generate any sort of nodecl (and if it does it is merrily ignored)
-                //  Everything is signed in a global scope
-                build_global_program_unit(program_unit);
-                break;
-            }
+        {
+            //  This is a Mercurium extension.
+            //  It does not generate any sort of nodecl (and if it does it is
+            //  merrily ignored)
+            //  Everything is signed in a global scope
+            build_global_program_unit(program_unit);
+            break;
+        }
         case AST_PRAGMA_CUSTOM_CONSTRUCT:
+        {
+            AST pragma_line = ASTSon0(program_unit);
+            AST nested_program_unit = ASTSon1(program_unit);
+
+            // Note this one has its own build_scope_delay_list_t.
+            build_scope_program_unit_internal(nested_program_unit,
+                                              decl_context,
+                                              &_program_unit_symbol,
+                                              nodecl_output);
+
+            if (_program_unit_symbol != NULL && !nodecl_is_null(*nodecl_output))
             {
-                AST pragma_line = ASTSon0(program_unit);
-                AST nested_program_unit = ASTSon1(program_unit);
+                const decl_context_t *context_in_scope
+                    = _program_unit_symbol->related_decl_context;
+                nodecl_t nodecl_pragma_line = nodecl_null();
+                common_build_scope_pragma_custom_line(pragma_line,
+                                                      /* end_clauses */ NULL,
+                                                      context_in_scope,
+                                                      &nodecl_pragma_line);
 
-                build_scope_program_unit_internal(nested_program_unit,
-                        decl_context, &_program_unit_symbol, nodecl_output);
-
-                if (_program_unit_symbol != NULL
-                        && !nodecl_is_null(*nodecl_output))
+                nodecl_t nodecl_nested_pragma = nodecl_null();
+                // Double nesting of pragmas
+                if (ASTKind(nested_program_unit) == AST_PRAGMA_CUSTOM_CONSTRUCT)
                 {
-                    const decl_context_t* context_in_scope = _program_unit_symbol->related_decl_context;
-                    nodecl_t nodecl_pragma_line = nodecl_null();
-                    common_build_scope_pragma_custom_line(pragma_line, /* end_clauses */ NULL, context_in_scope, &nodecl_pragma_line);
+                    int num_items = 0;
+                    nodecl_t *list
+                        = nodecl_unpack_list(*nodecl_output, &num_items);
 
-                    nodecl_t nodecl_nested_pragma = nodecl_null();
-                    // Double nesting of pragmas
-                    if (ASTKind(nested_program_unit) == AST_PRAGMA_CUSTOM_CONSTRUCT)
-                    {
-                        int num_items = 0;
-                        nodecl_t* list = nodecl_unpack_list(*nodecl_output, &num_items);
+                    ERROR_CONDITION(
+                        (num_items != 2),
+                        "This list does not have the expected shape",
+                        0);
+                    ERROR_CONDITION(nodecl_get_kind(list[1])
+                                        != NODECL_PRAGMA_CUSTOM_DECLARATION,
+                                    "Invalid kind for second item of the list",
+                                    0);
 
-                        ERROR_CONDITION((num_items != 2), "This list does not have the expected shape", 0);
-                        ERROR_CONDITION(nodecl_get_kind(list[1]) != NODECL_PRAGMA_CUSTOM_DECLARATION, 
-                                "Invalid kind for second item of the list", 0);
-
-                        nodecl_nested_pragma = list[1];
-                        DELETE(list);
-                    }
-
-                    nodecl_t nodecl_pragma_declaration =
-                        nodecl_make_pragma_custom_declaration(nodecl_pragma_line,
-                                nodecl_nested_pragma,
-                                nodecl_make_pragma_context(context_in_scope, ast_get_locus(program_unit)),
-                                nodecl_make_pragma_context(context_in_scope, ast_get_locus(program_unit)),
-                                _program_unit_symbol,
-                                strtolower(ASTText(program_unit)),
-                                ast_get_locus(program_unit));
-
-                    *nodecl_output = nodecl_make_list_2(
-                            nodecl_list_head(*nodecl_output),
-                            nodecl_pragma_declaration);
+                    nodecl_nested_pragma = list[1];
+                    DELETE(list);
                 }
-                break;
+
+                nodecl_t nodecl_pragma_declaration
+                    = nodecl_make_pragma_custom_declaration(
+                        nodecl_pragma_line,
+                        nodecl_nested_pragma,
+                        nodecl_make_pragma_context(context_in_scope,
+                                                   ast_get_locus(program_unit)),
+                        nodecl_make_pragma_context(context_in_scope,
+                                                   ast_get_locus(program_unit)),
+                        _program_unit_symbol,
+                        strtolower(ASTText(program_unit)),
+                        ast_get_locus(program_unit));
+
+                *nodecl_output
+                    = nodecl_make_list_2(nodecl_list_head(*nodecl_output),
+                                         nodecl_pragma_declaration);
             }
+            break;
+        }
         case AST_UNKNOWN_PRAGMA:
-            {
-                // Merrily ignore this tree
-                break;
-            }
+        {
+            // Merrily ignore this tree
+            break;
+        }
         default:
-            {
-                internal_error("Unhandled node type '%s'\n", ast_print_node_type(ASTKind(program_unit)));
-            }
+        {
+            internal_error("Unhandled node type '%s'\n",
+                           ast_print_node_type(ASTKind(program_unit)));
+        }
     }
+
+    build_scope_delay_list_pop();
 
     if (program_unit_symbol != NULL)
     {
         *program_unit_symbol = _program_unit_symbol;
     }
-}
-
-typedef void build_scope_delay_fun_t(void*, nodecl_t*);
-
-typedef
-struct build_scope_delay_info_tag
-{
-    build_scope_delay_fun_t* fun;
-    void *data;
-} build_scope_delay_info_t;
-
-typedef
-struct build_scope_delay_tag
-{
-    int num_delayed;
-    build_scope_delay_info_t* list;
-} build_scope_delay_list_t;
-
-
-enum { BUILD_SCOPE_DELAY_STACK_MAX = 16 };
-
-int _current_delay_stack_idx = 0;
-static build_scope_delay_list_t* _current_delay_stack[BUILD_SCOPE_DELAY_STACK_MAX];
-
-static void build_scope_delay_list_push(build_scope_delay_list_t* delay_list)
-{
-    ERROR_CONDITION(_current_delay_stack_idx == BUILD_SCOPE_DELAY_STACK_MAX, "Too many delayed scopes", 0);
-    _current_delay_stack[_current_delay_stack_idx] = delay_list;
-    _current_delay_stack_idx++;
-}
-
-static void build_scope_delay_list_pop(void)
-{
-    ERROR_CONDITION(_current_delay_stack_idx == 0, "Empty stack", 0);
-    _current_delay_stack_idx--;
-}
-
-static void build_scope_delay_list_run(build_scope_delay_list_t* delay_list,
-        nodecl_t *nodecl_output)
-{
-    int i;
-    for (i = 0; i < delay_list->num_delayed; i++)
-    {
-        nodecl_t nodecl_current = nodecl_null();
-        (delay_list->list[i].fun)(delay_list->list[i].data, &nodecl_current);
-
-        *nodecl_output = nodecl_concat_lists(*nodecl_output, nodecl_current);
-    }
-
-    delay_list->num_delayed = 0;
-    DELETE(delay_list->list);
-}
-
-static void build_scope_delay_list_add(build_scope_delay_fun_t* fun, void *data)
-{
-    ERROR_CONDITION(_current_delay_stack_idx == 0, "No active delay list", 0);
-
-    build_scope_delay_info_t new_delayed = { fun, data };
-
-    build_scope_delay_list_t *current_delay_list = _current_delay_stack[_current_delay_stack_idx - 1];
-
-    P_LIST_ADD(
-            current_delay_list->list,
-            current_delay_list->num_delayed,
-            new_delayed);
-}
-
-typedef char build_scope_delay_list_cmp_fun_t(void *key, void *data);
-
-static void build_scope_delay_list_advance(void *key,
-        build_scope_delay_list_cmp_fun_t *cmp_fun,
-        nodecl_t* nodecl_output)
-{
-    ERROR_CONDITION(_current_delay_stack_idx == 0, "No active delay list", 0);
-    build_scope_delay_list_t *current_delay_list = _current_delay_stack[_current_delay_stack_idx - 1];
-
-    char found = 0;
-    int i;
-    for (i = 0; i < current_delay_list->num_delayed && !found; i++)
-    {
-        if (cmp_fun(current_delay_list->list[i].data, key))
-        {
-            (current_delay_list->list[i].fun)(current_delay_list->list[i].data, nodecl_output);
-
-            current_delay_list->num_delayed--;
-            for (; i < current_delay_list->num_delayed; i++)
-            {
-                current_delay_list->list[i] = current_delay_list->list[i + 1];
-            }
-            found = 1;
-        }
-    }
-
-    ERROR_CONDITION(!found, "Delayed element not found", 0);
 }
 
 
@@ -933,11 +815,19 @@ static delayed_character_length_t* delayed_character_length_new(
 static void delayed_compute_character_length(
     void *info, nodecl_t *nodecl_output UNUSED_PARAMETER)
 {
+
     delayed_character_length_t *data = (delayed_character_length_t *)info;
 
     nodecl_t nodecl_len = nodecl_null();
     char is_star = 0;
     char is_colon = 0;
+
+    DEBUG_CODE()
+    {
+        fprintf(stderr,
+                "BUILDSCOPE: Computing delayed character length of '%s'\n",
+                prettyprint_in_buffer(data->length));
+    }
 
     if (ASTKind(data->length) == AST_SYMBOL
         && strcmp(ASTText(data->length), "*") == 0)
@@ -1020,26 +910,28 @@ static void delayed_compute_character_length(
     DELETE(data);
 }
 
-
-// We use this for the following case
-//
-// TYPE(X) FUNCTION FOO()
-//    USE P
-// END FUNCTION FOO
-//
-// We have to wait until all the USE-statements have been processed
-// to fully parse postponed_function_type_spec
-static AST postponed_function_type_spec = NULL;
-//
-static void solve_postponed_function_type_spec(const decl_context_t* decl_context)
+typedef
+struct postponed_function_type_spec_t
 {
+    const decl_context_t* decl_context;
+    AST postponed_function_type_spec;
+} postponed_function_type_spec_t;
+
+static void delayed_solve_postponed_function_type_spec(void *info, UNUSED_PARAMETER nodecl_t* nodecl_out)
+{
+    postponed_function_type_spec_t* postponed_info = (postponed_function_type_spec_t*)info;
+    AST postponed_function_type_spec = postponed_info->postponed_function_type_spec;
+    const decl_context_t* decl_context = postponed_info->decl_context;
+
     AST length = NULL;
     type_t* function_type_spec =
         fortran_gather_type_from_declaration_type_spec(postponed_function_type_spec, decl_context, &length);
-    postponed_function_type_spec = NULL;
 
     if (is_error_type(function_type_spec))
+    {
+        DELETE(info);
         return;
+    }
 
     scope_entry_t* current_function = decl_context->current_scope->related_entry;
 
@@ -1047,7 +939,6 @@ static void solve_postponed_function_type_spec(const decl_context_t* decl_contex
     current_function->type_information = fortran_update_basic_type_with_type(current_function->type_information,
             function_type_spec);
     symbol_entity_specs_set_is_implicit_basic_type(current_function, 0);
-    remove_untyped_symbol(decl_context, current_function);
 
     // Update the result name as well
     scope_entry_t* result_name = symbol_entity_specs_get_result_var(current_function);
@@ -1056,7 +947,6 @@ static void solve_postponed_function_type_spec(const decl_context_t* decl_contex
         result_name->type_information = fortran_update_basic_type_with_type(result_name->type_information,
                 function_type_spec);
         symbol_entity_specs_set_is_implicit_basic_type(result_name, 0);
-        remove_untyped_symbol(decl_context, result_name);
     }
 
     if (fortran_is_character_type(function_type_spec)
@@ -1070,8 +960,11 @@ static void solve_postponed_function_type_spec(const decl_context_t* decl_contex
                     /* number_of_symbols */ 2,
                     (scope_entry_t*[2]){current_function, result_name});
 
-        build_scope_delay_list_add(delayed_compute_character_length, data);
+        build_scope_delay_list_add(
+            DELAY_AFTER_DECLARATIONS, delayed_compute_character_length, data);
     }
+
+    DELETE(info);
 }
 
 static scope_entry_t* new_procedure_symbol(
@@ -1332,6 +1225,129 @@ static char block_data_allowed_statements(
     }
 }
 
+static void delay_review_symbol_has_known_kind(
+    void *data, UNUSED_PARAMETER nodecl_t *nodecl_out)
+{
+    scope_entry_t *sym = (scope_entry_t *)data;
+    if (sym->kind == SK_UNDEFINED)
+    {
+        DEBUG_CODE()
+        {
+            fprintf(stderr,
+                    "BUILDSCOPE: Making symbol '%s' which is still "
+                    "SK_UNDEFINED a SK_VARIABLE\n",
+                    sym->symbol_name);
+        }
+        sym->kind = SK_VARIABLE;
+    }
+}
+
+void add_unknown_kind_symbol(
+    UNUSED_PARAMETER const decl_context_t *decl_context, scope_entry_t *entry)
+{
+    build_scope_delay_list_add(
+        DELAY_AFTER_PROGRAM_UNIT, delay_review_symbol_has_known_kind, entry);
+}
+
+typedef
+struct delay_check_is_parameter_tag
+{
+    const decl_context_t* decl_context;
+    scope_entry_t* entry;
+} delay_check_is_parameter_t;
+
+static void delay_check_symbol_is_parameter(
+    void *data, UNUSED_PARAMETER nodecl_t *nodecl_out)
+{
+    delay_check_is_parameter_t* check_param_info = (delay_check_is_parameter_t*)data;
+    const decl_context_t* decl_context = check_param_info->decl_context;
+    scope_entry_t *entry = check_param_info->entry;
+
+    DEBUG_CODE()
+    {
+        fprintf(stderr,
+                "BUILDSCOPE: Delayed check if '%s' is a parameter\n",
+                entry->symbol_name);
+    }
+
+    if (!symbol_is_parameter_of_function(
+            entry, decl_context->current_scope->related_entry))
+    {
+        error_printf_at(entry->locus,
+                        "entity '%s' is not a dummy argument\n",
+                        entry->symbol_name);
+    }
+
+    DELETE(data);
+}
+
+static void add_intent_declared_symbol(const decl_context_t *decl_context,
+                                       scope_entry_t *entry)
+{
+    delay_check_is_parameter_t *param_info = NEW0(delay_check_is_parameter_t);
+    param_info->decl_context = decl_context;
+    param_info->entry = entry;
+    build_scope_delay_list_add(
+        DELAY_AFTER_PROGRAM_UNIT, delay_check_symbol_is_parameter, param_info);
+}
+
+static char cmp_intent_declared_symbol(void *key, void *data)
+{
+    scope_entry_t* entry = (scope_entry_t*)key;
+    delay_check_is_parameter_t* check_param_info = (delay_check_is_parameter_t*)data;
+    return entry == check_param_info->entry;
+}
+
+static void remove_intent_declared_symbol(scope_entry_t *entry)
+{
+    build_scope_delay_list_remove(
+        DELAY_AFTER_PROGRAM_UNIT,
+        entry,
+        delay_check_symbol_is_parameter,
+        cmp_intent_declared_symbol);
+}
+
+static void delay_check_fully_defined_symbol(
+    void *data, UNUSED_PARAMETER nodecl_t *nodecl_out)
+{
+    scope_entry_t *entry = (scope_entry_t *)data;
+
+    DEBUG_CODE()
+    {
+        fprintf(stderr,
+                "BUILDSCOPE: Delayed check if '%s' has been fully defined\n",
+                entry->symbol_name);
+    }
+
+    if (!entry->defined && entry->kind == SK_COMMON)
+    {
+        error_printf_at(entry->locus,
+                        "COMMON '%s' does not exist\n",
+                        entry->symbol_name + strlen(".common."));
+    }
+    else if (!entry->defined && entry->kind == SK_FUNCTION
+             && symbol_entity_specs_get_is_module_procedure(entry))
+    {
+        error_printf_at(entry->locus,
+                        "MODULE PROCEDURE '%s' does not exist\n",
+                        entry->symbol_name);
+    }
+    else if (!entry->defined && entry->kind == SK_CLASS)
+    {
+        error_printf_at(entry->locus,
+                        "derived type name 'TYPE(%s)' has not been defined\n",
+                        entry->symbol_name);
+    }
+}
+
+static void add_not_fully_defined_symbol(
+        UNUSED_PARAMETER const decl_context_t *decl_context,
+        scope_entry_t* entry)
+{
+    build_scope_delay_list_add(
+        DELAY_AFTER_PROGRAM_UNIT, delay_check_fully_defined_symbol, entry);
+}
+
 static void build_scope_program_unit_body(
         AST program_unit_stmts,
         AST internal_subprograms,
@@ -1341,10 +1357,11 @@ static void build_scope_program_unit_body(
         nodecl_t* nodecl_output,
         nodecl_t* nodecl_internal_subprograms);
 
-static void build_scope_main_program_unit(AST program_unit, 
-        const decl_context_t* decl_context, 
-        scope_entry_t** program_unit_symbol,
-        nodecl_t* nodecl_output)
+static void build_scope_main_program_unit(
+    AST program_unit,
+    const decl_context_t *decl_context,
+    scope_entry_t **program_unit_symbol,
+    nodecl_t *nodecl_output)
 {
     const decl_context_t* program_unit_context = new_program_unit_context(decl_context);
     
@@ -1367,8 +1384,6 @@ static void build_scope_main_program_unit(AST program_unit,
 
     symbol_entity_specs_set_is_global_hidden(program_sym, 1);
     
-    remove_unknown_kind_symbol(decl_context, program_sym);
-
     program_sym->related_decl_context = program_unit_context;
     program_unit_context->current_scope->related_entry = program_sym;
 
@@ -1453,10 +1468,11 @@ static char inside_interface(AST a)
 }
 
 
-static void build_scope_function_program_unit(AST program_unit, 
-        const decl_context_t* decl_context, 
-        scope_entry_t** program_unit_symbol,
-        nodecl_t* nodecl_output)
+static void build_scope_function_program_unit(
+    AST program_unit,
+    const decl_context_t *decl_context,
+    scope_entry_t **program_unit_symbol,
+    nodecl_t *nodecl_output)
 {
     const decl_context_t* program_unit_context = new_program_unit_context(decl_context);
 
@@ -1518,7 +1534,6 @@ static void build_scope_function_program_unit(AST program_unit,
         if (symbol_entity_specs_get_related_symbols_num(new_entry, i)->kind == SK_UNDEFINED)
         {
             symbol_entity_specs_get_related_symbols_num(new_entry, i)->kind = SK_VARIABLE;
-            remove_unknown_kind_symbol(program_unit_context, new_entry);
         }
     }
 
@@ -1565,10 +1580,11 @@ static scope_entry_t* register_subroutine(AST program_unit,
     return new_entry;
 }
 
-static void build_scope_subroutine_program_unit(AST program_unit, 
-        const decl_context_t* decl_context, 
-        scope_entry_t** program_unit_symbol,
-        nodecl_t* nodecl_output)
+static void build_scope_subroutine_program_unit(
+    AST program_unit,
+    const decl_context_t *decl_context,
+    scope_entry_t **program_unit_symbol,
+    nodecl_t *nodecl_output)
 {
     const decl_context_t* program_unit_context = new_program_unit_context(decl_context);
 
@@ -1635,7 +1651,6 @@ static void build_scope_subroutine_program_unit(AST program_unit,
         if (symbol_entity_specs_get_related_symbols_num(new_entry, i)->kind == SK_UNDEFINED)
         {
             symbol_entity_specs_get_related_symbols_num(new_entry, i)->kind = SK_VARIABLE;
-            remove_unknown_kind_symbol(program_unit_context, new_entry);
         }
     }
 
@@ -1656,10 +1671,11 @@ static void build_scope_subroutine_program_unit(AST program_unit,
     *nodecl_output = nodecl_make_list_1(function_code);
 }
 
-static void build_scope_module_program_unit(AST program_unit, 
-        const decl_context_t* decl_context,
-        scope_entry_t** program_unit_symbol,
-        nodecl_t* nodecl_output)
+static void build_scope_module_program_unit(
+    AST program_unit,
+    const decl_context_t *decl_context,
+    scope_entry_t **program_unit_symbol,
+    nodecl_t *nodecl_output)
 {
     const decl_context_t* program_unit_context = new_program_unit_context(decl_context);
 
@@ -1693,8 +1709,6 @@ static void build_scope_module_program_unit(AST program_unit,
                     "invalid module nature. Only INTRINSIC is allowed\n");
         }
     }
-
-    remove_unknown_kind_symbol(decl_context, new_entry);
 
     new_entry->related_decl_context = program_unit_context;
     new_entry->locus = ast_get_locus(module_stmt);
@@ -1751,7 +1765,6 @@ static void build_scope_module_program_unit(AST program_unit,
         if (symbol_entity_specs_get_related_symbols_num(new_entry, i)->kind == SK_UNDEFINED)
         {
             symbol_entity_specs_get_related_symbols_num(new_entry, i)->kind = SK_VARIABLE;
-            remove_unknown_kind_symbol(program_unit_context, new_entry);
         }
 
         // Fix their access
@@ -1778,10 +1791,11 @@ static void build_scope_module_program_unit(AST program_unit,
     }
 }
 
-static void build_scope_block_data_program_unit(AST program_unit,
-        const decl_context_t* decl_context,
-        scope_entry_t** program_unit_symbol,
-        nodecl_t* nodecl_output)
+static void build_scope_block_data_program_unit(
+    AST program_unit,
+    const decl_context_t *decl_context,
+    scope_entry_t **program_unit_symbol,
+    nodecl_t *nodecl_output)
 {
     const decl_context_t* program_unit_context = new_program_unit_context(decl_context);
 
@@ -1808,8 +1822,6 @@ static void build_scope_block_data_program_unit(AST program_unit,
 
     if (program_sym->decl_context->current_scope == decl_context->global_scope)
         symbol_entity_specs_set_is_global_hidden(program_sym, 1);
-    
-    remove_unknown_kind_symbol(decl_context, program_sym);
     
     program_sym->related_decl_context = program_unit_context;
     program_unit_context->current_scope->related_entry = program_sym;
@@ -1840,7 +1852,8 @@ static void build_scope_block_data_program_unit(AST program_unit,
             nodecl_make_object_init(program_sym, ast_get_locus(program_unit)));
 }
 
-static void build_global_program_unit(AST program_unit)
+static void build_global_program_unit(
+    AST program_unit)
 {
     decl_context_t* program_unit_context = decl_context_clone(CURRENT_COMPILED_FILE->global_decl_context);
     program_unit_context->function_scope = program_unit_context->current_scope;
@@ -1974,9 +1987,6 @@ static type_t* fortran_gather_type_from_declaration_type_spec_of_component(AST a
             scope_entry_t* entry = get_symbol_for_name(decl_context, name, ASTText(name));
             entry->kind = SK_CLASS;
 
-            remove_untyped_symbol(decl_context, entry);
-            remove_unknown_kind_symbol(decl_context, entry);
-
             add_not_fully_defined_symbol(decl_context, entry);
 
             result = get_user_defined_type(entry);
@@ -1994,6 +2004,70 @@ static type_t* fortran_gather_type_from_declaration_type_spec_of_component(AST a
 static void check_bind_spec(scope_entry_t *entry,
                             AST bind_spec,
                             const decl_context_t *decl_context);
+
+typedef
+struct implicit_update_info_tag
+{
+    scope_entry_t* entry;
+    const decl_context_t* decl_context;
+} implicit_update_info_t;
+
+static void delay_update_implicit_type(void *data,
+                                       UNUSED_PARAMETER nodecl_t *nodecl_out);
+
+// This function marks a symbol so a later IMPLICIT statement will update its
+// base type (what Fortran calls the type). Because of the ordering of
+// the instructions, only a few symbols whose name occurs before an IMPLICIT 
+// statement, is required.
+static void add_symbol_type_not_firm_yet(const decl_context_t *decl_context,
+                                         scope_entry_t *entry)
+{
+    implicit_update_info_t *implicit_info = NEW0(implicit_update_info_t);
+    implicit_info->entry = entry;
+    implicit_info->decl_context = decl_context;
+
+    build_scope_delay_list_add(DELAY_AFTER_IMPLICIT_STATEMENT,
+                               delay_update_implicit_type,
+                               implicit_info);
+}
+
+
+typedef
+struct check_has_type_spec_info_tag
+{
+    scope_entry_t* entry;
+    // const decl_context_t* decl_context;
+} check_has_type_spec_info_t;
+
+static void delay_check_has_type_spec(void *data,
+                                      UNUSED_PARAMETER nodecl_t *nodecl_out)
+{
+    check_has_type_spec_info_t *info = (check_has_type_spec_info_t *)data;
+    scope_entry_t *entry = info->entry;
+    // const decl_context_t *decl_context = info->decl_context;
+
+    if (symbol_entity_specs_get_is_implicit_basic_type(entry)
+            && fortran_basic_type_is_implicit_none(entry->type_information))
+    {
+        error_printf_at(entry->locus, "symbol '%s' has no IMPLICIT type\n",
+                entry->symbol_name);
+    }
+
+    DELETE(info);
+}
+
+static void add_delay_check_symbol_needs_type_specifier(
+    UNUSED_PARAMETER const decl_context_t *decl_context, scope_entry_t *entry)
+{
+    check_has_type_spec_info_t *check_has_type_spec_info
+        = NEW0(check_has_type_spec_info_t);
+    check_has_type_spec_info->entry = entry;
+    // check_has_type_spec_info->decl_context = decl_context;
+
+    build_scope_delay_list_add(DELAY_AFTER_DECLARATIONS,
+                               delay_check_has_type_spec,
+                               check_has_type_spec_info);
+}
 
 static scope_entry_t* new_procedure_symbol(
         const decl_context_t* decl_context,
@@ -2048,8 +2122,6 @@ static scope_entry_t* new_procedure_symbol(
             {
                 entry->kind = SK_VARIABLE;
             }
-
-            remove_unknown_kind_symbol(entry->decl_context, entry);
         }
     }
 
@@ -2065,12 +2137,11 @@ static scope_entry_t* new_procedure_symbol(
 
     entry->locus = ast_get_locus(name);
     symbol_entity_specs_set_is_implicit_basic_type(entry, 1);
+    add_symbol_type_not_firm_yet(decl_context, entry);
     entry->defined = 1;
 
     if (entry->decl_context->current_scope == decl_context->global_scope)
         symbol_entity_specs_set_is_global_hidden(entry, 1);
-
-    remove_unknown_kind_symbol(decl_context, entry);
 
     type_t* return_type = get_void_type();
     if (is_function)
@@ -2102,7 +2173,14 @@ static scope_entry_t* new_procedure_symbol(
                 else
                 {
                     AST declaration_type_spec = ASTSon0(prefix_spec);
-                    postponed_function_type_spec = declaration_type_spec;
+
+                    postponed_function_type_spec_t *postponed_info = NEW0(postponed_function_type_spec_t);
+                    postponed_info->decl_context = program_unit_context;
+                    postponed_info->postponed_function_type_spec = declaration_type_spec;
+                    build_scope_delay_list_add(
+                            DELAY_AFTER_USE_STATEMENT,
+                            delayed_solve_postponed_function_type_spec,
+                            postponed_info);
                 }
             }
             else if (strcasecmp(prefix_spec_str, "elemental") == 0)
@@ -2179,6 +2257,7 @@ static scope_entry_t* new_procedure_symbol(
                 // If the symbol already has an lvalue reference type it means
                 // that we have already visited a dummy argument with the same
                 // name. Thus, we should emit an error.
+                // FIXME: This check is not very robust.
                 if (dummy_arg->type_information != NULL
                         && is_lvalue_reference_type(dummy_arg->type_information))
                 {
@@ -2193,7 +2272,7 @@ static scope_entry_t* new_procedure_symbol(
                 // Get a reference to its type (it will be properly updated later)
                 dummy_arg->type_information = get_lvalue_reference_type(dummy_arg->type_information);
 
-                add_untyped_symbol(program_unit_context, dummy_arg);
+                add_symbol_type_not_firm_yet(program_unit_context, dummy_arg);
             }
 
             dummy_arg->locus = ast_get_locus(dummy_arg_name);
@@ -2232,8 +2311,7 @@ static scope_entry_t* new_procedure_symbol(
             symbol_entity_specs_set_is_result_var(result_sym, 1);
 
             symbol_entity_specs_set_is_implicit_basic_type(result_sym, 1);
-
-            remove_unknown_kind_symbol(program_unit_context, result_sym);
+            add_symbol_type_not_firm_yet(program_unit_context, result_sym);
 
             result_sym->type_information = return_type;
 
@@ -2264,8 +2342,7 @@ static scope_entry_t* new_procedure_symbol(
 
         result_sym->type_information = return_type;
         symbol_entity_specs_set_is_implicit_basic_type(result_sym, 1);
-
-        add_untyped_symbol(program_unit_context, result_sym);
+        add_symbol_type_not_firm_yet(program_unit_context, result_sym);
 
         return_type = get_mutable_indirect_type(result_sym);
 
@@ -2357,11 +2434,6 @@ static scope_entry_t* new_entry_symbol(const decl_context_t* decl_context,
                     ASTText(name));
             return NULL;
         }
-        // It can't be redefined anymore
-        if (symbol_entity_specs_get_is_module_procedure(existing_name))
-        {
-            remove_not_fully_defined_symbol(existing_name->decl_context, existing_name);
-        }
     }
 
     scope_entry_t* entry = existing_name;
@@ -2378,8 +2450,8 @@ static scope_entry_t* new_entry_symbol(const decl_context_t* decl_context,
     entry->locus = ast_get_locus(name);
     symbol_entity_specs_set_is_entry(entry, 1);
     symbol_entity_specs_set_is_implicit_basic_type(entry, 1);
+    add_symbol_type_not_firm_yet(principal_procedure->decl_context, entry);
     entry->defined = 1;
-    remove_unknown_kind_symbol(decl_context, entry);
 
     if (principal_procedure->decl_context->current_scope == principal_procedure->decl_context->global_scope)
     {
@@ -2453,10 +2525,9 @@ static scope_entry_t* new_entry_symbol(const decl_context_t* decl_context,
                 if (!is_lvalue_reference_type(dummy_arg->type_information)) 
                 {
                     dummy_arg->type_information = get_lvalue_reference_type(dummy_arg->type_information);
-                    add_untyped_symbol(decl_context, dummy_arg);
                 }
 
-                remove_intent_declared_symbol(decl_context, dummy_arg);
+                remove_intent_declared_symbol(dummy_arg);
             }
 
             dummy_arg->locus = ast_get_locus(dummy_arg_name);
@@ -2495,8 +2566,6 @@ static scope_entry_t* new_entry_symbol(const decl_context_t* decl_context,
             result_sym->locus = ast_get_locus(result);
             symbol_entity_specs_set_is_result_var(result_sym, 1);
 
-            remove_unknown_kind_symbol(decl_context, result_sym);
-
             if (symbol_entity_specs_get_is_implicit_basic_type(result_sym))
             {
                 // If the symbol does not have any type, use the computed return type so far
@@ -2529,8 +2598,6 @@ static scope_entry_t* new_entry_symbol(const decl_context_t* decl_context,
         result_sym->kind = SK_VARIABLE;
         result_sym->locus = entry->locus;
         symbol_entity_specs_set_is_result_var(result_sym, 1);
-
-        remove_unknown_kind_symbol(decl_context, result_sym);
 
         if (symbol_entity_specs_get_is_implicit_basic_type(result_sym))
         {
@@ -2596,6 +2663,7 @@ static void build_scope_program_unit_body_declarations(
         AST *first_executable_statement,
         nodecl_t* nodecl_output)
 {
+    char still_possible_use_stmt = 1;
     if (program_unit_stmts != NULL)
     {
         AST it;
@@ -2610,15 +2678,6 @@ static void build_scope_program_unit_body_declarations(
                 build_scope_ambiguity_statement(stmt, decl_context, /* is_declaration */ 1);
             }
 
-            // If the current statement is not a USE we have to solve
-            if (postponed_function_type_spec != NULL
-                    && ASTKind(stmt) != AST_USE_STATEMENT
-                    && ASTKind(stmt) != AST_USE_ONLY_STATEMENT
-                    && ASTKind(stmt) != AST_IMPORT_STATEMENT)
-            {
-                solve_postponed_function_type_spec(decl_context);
-            }
-
             // We only handle nonexecutable statements here
             if (statement_get_order_class(stmt) == SOC_EXECUTABLE)
             {
@@ -2629,6 +2688,15 @@ static void build_scope_program_unit_body_declarations(
             if (!statement_constraint_checker_check_statement(
                     constraint_checker, stmt, decl_context))
                 continue;
+
+            if (still_possible_use_stmt
+                && !(*constraint_checker->current_order_class & SOC_USE))
+            {
+                // Run delayed actions that can be run once we have seen a USE
+                still_possible_use_stmt = 0;
+                build_scope_delay_list_run(DELAY_AFTER_USE_STATEMENT,
+                                           /* nodecl_output */ NULL);
+            }
 
             // Nonexecutable statements usually do not generate nodecls, but
             // some of them do (e.g. during initialization of saved array
@@ -2642,10 +2710,13 @@ static void build_scope_program_unit_body_declarations(
         }
     }
 
-    // If we reach the end and the type is not yet defined, solve it now
-    if (postponed_function_type_spec != NULL)
+    // If all what we have seen before executables are USE, just 
+    // run the delayed actions now.
+    if (still_possible_use_stmt)
     {
-        solve_postponed_function_type_spec(decl_context);
+        still_possible_use_stmt = 0;
+        build_scope_delay_list_run(DELAY_AFTER_USE_STATEMENT,
+                /* nodecl_output */ NULL);
     }
 }
 
@@ -2867,7 +2938,6 @@ static scope_entry_t* build_scope_internal_subprogram(
                 = statement_constraint_checker_init(allow_all_statements);
 
             symbol_entity_specs_set_is_module_procedure(new_entry, 1);
-            remove_not_fully_defined_symbol(decl_context, new_entry);
         }
         else
         {
@@ -2929,6 +2999,8 @@ static void build_scope_program_unit_body_internal_subprograms_executable(
     {
         ERROR_CONDITION(i >= num_internal_program_units, "Too many internal program units", 0);
 
+        build_scope_delay_list_push(&internal_subprograms_info[i].delayed_list);
+
         // Some error happened during
         // build_scope_program_unit_body_internal_subprograms_declarations and
         // we could not get any symbol for this one. Skip it
@@ -2948,7 +3020,7 @@ static void build_scope_program_unit_body_internal_subprograms_executable(
                     internal_subprograms_info[i].decl_context);
 
             build_scope_delay_list_run(
-                    &internal_subprograms_info[i].delayed_list,
+                    DELAY_AFTER_DECLARATIONS,
                     &(internal_subprograms_info[i].nodecl_output));
 
             build_scope_program_unit_body_executable(
@@ -2965,11 +3037,9 @@ static void build_scope_program_unit_body_internal_subprograms_executable(
                     n_internal_subprograms_info,
                     internal_subprograms_info[i].decl_context);
 
-            // Check all the symbols of this program unit
-            check_untyped_symbols(internal_subprograms_info[i].decl_context);
-            check_not_fully_defined_symbols(internal_subprograms_info[i].decl_context);
-            check_intent_declared_symbols(internal_subprograms_info[i].decl_context);
-            review_unknown_kind_symbol(internal_subprograms_info[i].decl_context);
+            build_scope_delay_list_run(
+                    DELAY_AFTER_PROGRAM_UNIT,
+                    &(internal_subprograms_info[i].nodecl_output));
 
             // 6) Remember the internal subprogram nodecls
             nodecl_t nodecl_internal_subprograms = nodecl_null();
@@ -2998,7 +3068,6 @@ static void build_scope_program_unit_body_internal_subprograms_executable(
                 if (symbol_entity_specs_get_related_symbols_num(function_symbol, j)->kind == SK_UNDEFINED)
                 {
                     symbol_entity_specs_get_related_symbols_num(function_symbol, j)->kind = SK_VARIABLE;
-                    remove_unknown_kind_symbol(decl_context, function_symbol);
                 }
             }
 
@@ -3027,6 +3096,9 @@ static void build_scope_program_unit_body_internal_subprograms_executable(
             symbol_entity_specs_set_function_code(internal_subprograms_info[i].symbol, function_code);
             internal_subprograms_info[i].nodecl_output = function_code;
         }
+
+        build_scope_delay_list_pop();
+
         i++;
     }
 }
@@ -3042,8 +3114,6 @@ static void build_scope_program_unit_body(
         nodecl_t* nodecl_internal_subprograms)
 {
     // 1) Program unit declaration only
-    build_scope_delay_list_t program_unit_delayed = { .num_delayed = 0 };
-    build_scope_delay_list_push(&program_unit_delayed);
     AST first_executable_statement = NULL;
     build_scope_program_unit_body_declarations(
             constraint_checker,
@@ -3051,7 +3121,6 @@ static void build_scope_program_unit_body(
             decl_context, 
             &first_executable_statement,
             nodecl_output);
-    build_scope_delay_list_pop();
 
     int num_internal_program_units = count_internal_subprograms(internal_subprograms);
     // Count how many internal subprograms are there
@@ -3066,7 +3135,7 @@ static void build_scope_program_unit_body(
             decl_context);
     
     // 3) Program unit remaining statements
-    build_scope_delay_list_run(&program_unit_delayed, nodecl_output);
+    build_scope_delay_list_run(DELAY_AFTER_DECLARATIONS, nodecl_output);
 
     build_scope_program_unit_body_executable(
             constraint_checker,
@@ -3084,10 +3153,7 @@ static void build_scope_program_unit_body(
             decl_context);
     
     // 5) Check all symbols of this program unit
-    check_untyped_symbols(decl_context);
-    check_not_fully_defined_symbols(decl_context);
-    check_intent_declared_symbols(decl_context);
-    review_unknown_kind_symbol(decl_context);
+    build_scope_delay_list_run(DELAY_AFTER_PROGRAM_UNIT, nodecl_output);
 
     // 6) Remember the internal subprogram nodecls
     int i;
@@ -4517,34 +4583,34 @@ static void compute_type_from_array_spec(
 {
     if (!allow_nonconstant)
     {
-        type_t* array_type = eval_array_spec(basic_type,
-                array_spec_list,
-                decl_context,
-                /* check_expressions */ 1,
-                /* nodecl_output */ NULL);
+        type_t *array_type = eval_array_spec(basic_type,
+                                             array_spec_list,
+                                             decl_context,
+                                             /* check_expressions */ 1,
+                                             /* nodecl_output */ NULL);
         entry->type_information = array_type;
     }
     else
     {
-        type_t* array_type = eval_array_spec(basic_type,
-                array_spec_list,
-                decl_context,
-                /* check_expressions */ 0,
-                /* nodecl_output */ NULL);
+        type_t *array_type = eval_array_spec(basic_type,
+                                             array_spec_list,
+                                             decl_context,
+                                             /* check_expressions */ 0,
+                                             /* nodecl_output */ NULL);
         entry->type_information = array_type;
 
-        // Now register a delayed process
-
-        delayed_array_spec_t * data = NEW(delayed_array_spec_t);
+        // Now register a delayed action
+        delayed_array_spec_t *data = NEW(delayed_array_spec_t);
         data->entry = entry;
         data->basic_type = basic_type;
         data->array_spec_list = array_spec_list;
         data->decl_context = decl_context;
 
-        build_scope_delay_list_add(delayed_compute_type_from_array_spec, data);
+        build_scope_delay_list_add(DELAY_AFTER_DECLARATIONS,
+                                   delayed_compute_type_from_array_spec,
+                                   data);
     }
 }
-
 
 static char array_type_is_deferred_shape(type_t* t)
 {
@@ -4700,7 +4766,6 @@ static void build_scope_allocatable_stmt(AST a, const decl_context_t* decl_conte
         if (entry->kind == SK_UNDEFINED)
         {
             entry->kind = SK_VARIABLE;
-            remove_unknown_kind_symbol(decl_context, entry);
         }
 
         if (entry->kind != SK_VARIABLE)
@@ -5205,7 +5270,6 @@ static scope_entry_t* new_common(const decl_context_t* decl_context, const char*
 
     scope_entry_t* common_sym = new_fortran_symbol(program_unit_context, get_common_name_str(common_name));
     common_sym->kind = SK_COMMON;
-    remove_unknown_kind_symbol(program_unit_context, common_sym);
     return common_sym;
 }
 
@@ -5241,7 +5305,8 @@ static void build_scope_common_stmt(AST a,
         }
         else
         {
-            remove_not_fully_defined_symbol(decl_context, common_sym);
+            // Defined now
+            common_sym->defined = 1;
         }
         
         AST it2;
@@ -5277,7 +5342,6 @@ static void build_scope_common_stmt(AST a,
             if (sym->kind == SK_UNDEFINED)
             {
                 sym->kind = SK_VARIABLE;
-                remove_unknown_kind_symbol(decl_context, sym);
             }
             // We mark the symbol as non static and is in a common
             symbol_entity_specs_set_is_static(sym, 0);
@@ -5529,7 +5593,6 @@ scope_entry_t* fortran_query_construct_name_str(
                 if (new_label == SK_UNDEFINED)
                 {
                     new_label->kind = SK_LABEL;
-                    remove_unknown_kind_symbol(program_unit_context, new_label);
                 }
 
                 new_label->defined = 1;
@@ -5660,7 +5723,6 @@ static void generic_implied_do_handler(AST a, const decl_context_t* decl_context
     if (do_variable->kind == SK_UNDEFINED)
     {
         do_variable->kind = SK_VARIABLE;
-        remove_unknown_kind_symbol(decl_context, do_variable);
     }
     else if (do_variable->kind != SK_VARIABLE)
     {
@@ -5822,7 +5884,8 @@ static void build_scope_data_stmt(AST a, const decl_context_t* decl_context, nod
     data->a = a;
     data->decl_context = decl_context;
 
-    build_scope_delay_list_add(delayed_compute_data_stmt, data);
+    build_scope_delay_list_add(
+        DELAY_AFTER_DECLARATIONS, delayed_compute_data_stmt, data);
 }
 
 static void build_scope_deallocate_stmt(AST a,
@@ -5955,7 +6018,6 @@ static void build_scope_derived_type_data_component_def(
         entry->kind = SK_VARIABLE;
 
         entry->locus = ast_get_locus(declaration);
-        remove_unknown_kind_symbol(inner_decl_context, entry);
 
         entry->type_information = basic_type;
         symbol_entity_specs_set_is_implicit_basic_type(entry, 0);
@@ -6284,9 +6346,6 @@ static void build_scope_derived_type_def(AST a, const decl_context_t* decl_conte
         symbol_entity_specs_set_bind_info(class_name, attr_spec.bind_info);
     class_name->defined = 1;
 
-    remove_not_fully_defined_symbol(decl_context, class_name);
-    remove_unknown_kind_symbol(decl_context, class_name);
-
     if (attr_spec.is_public)
     {
         symbol_entity_specs_set_access(class_name, AS_PUBLIC);
@@ -6437,7 +6496,6 @@ static void build_scope_dimension_stmt(AST a, const decl_context_t* decl_context
         if (entry->kind == SK_UNDEFINED)
         {
             entry->kind = SK_VARIABLE;
-            remove_unknown_kind_symbol(decl_context, entry);
         }
 
         if (!is_error_type(entry->type_information))
@@ -6868,11 +6926,13 @@ static void build_scope_equivalence_stmt(AST a,
         const decl_context_t* decl_context,
         nodecl_t* nodecl_output UNUSED_PARAMETER)
 {
-    delayed_equivalence_statement_t * data = NEW(delayed_equivalence_statement_t);
+    delayed_equivalence_statement_t *data
+        = NEW(delayed_equivalence_statement_t);
     data->a = a;
     data->decl_context = decl_context;
 
-    build_scope_delay_list_add(delayed_equivalence_statement, data);
+    build_scope_delay_list_add(
+        DELAY_AFTER_DECLARATIONS, delayed_equivalence_statement, data);
 }
 
 static void build_scope_exit_stmt(AST a, const decl_context_t* decl_context, nodecl_t* nodecl_output)
@@ -6948,7 +7008,6 @@ static void build_scope_external_stmt(AST a, const decl_context_t* decl_context,
                 // This is a dummy procedure
                 entry->kind = SK_VARIABLE;
             }
-            remove_unknown_kind_symbol(decl_context, entry);
         }
 
         type_t* type = entry->type_information;
@@ -6977,7 +7036,6 @@ static void build_scope_external_stmt(AST a, const decl_context_t* decl_context,
         {
             new_type = get_nonproto_function_type(type, 0);
         }
-        remove_untyped_symbol(decl_context, entry);
 
         if (was_pointer)
         {
@@ -7198,6 +7256,81 @@ static void build_scope_if_construct(AST a, const decl_context_t* decl_context, 
                     ast_get_locus(a)));
 }
 
+static void delay_update_implicit_type(void *data,
+                                       UNUSED_PARAMETER nodecl_t *nodecl_out)
+{
+    implicit_update_info_t *info = (implicit_update_info_t *)data;
+    scope_entry_t *entry = info->entry;
+    const decl_context_t *decl_context = info->decl_context;
+
+    DEBUG_CODE()
+    {
+        fprintf(stderr,
+                "BUILDSCOPE: Need to update existing implicit type of symbol "
+                "'%s' at '%s'\n",
+                entry->symbol_name,
+                locus_to_str(entry->locus));
+    }
+
+    ERROR_CONDITION(entry->type_information == NULL, "Invalid type for unknown entity '%s'\n", entry->symbol_name);
+
+    // ERROR_CONDITION(!symbol_entity_specs_get_is_implicit_basic_type(entry),
+    //                 "Only those symbols without an explicit type declaration "
+    //                 "can appear here",
+    //                 0);
+
+    if (!symbol_entity_specs_get_is_implicit_basic_type(entry))
+    {
+        DEBUG_CODE()
+        {
+            fprintf(stderr,
+                    "BUILDSCOPE: Type of '%s' does not need updating\n",
+                    entry->symbol_name);
+        }
+        // Nothing remains to do here.
+        DELETE(data);
+        return;
+    }
+
+
+    type_t *implicit_type
+        = get_implicit_type_for_symbol(decl_context, entry->symbol_name);
+
+    entry->type_information = fortran_update_basic_type_with_type(
+        entry->type_information, implicit_type);
+
+    if (!is_implicit_none_type(implicit_type))
+    {
+        DEBUG_CODE()
+        {
+            fprintf(stderr,
+                    "BUILDSCOPE: Implicit type of symbol '%s' at '%s' updated to %s\n",
+                    entry->symbol_name,
+                    locus_to_str(entry->locus),
+                    entry->type_information == NULL ?
+                        "<<NULL>>" :
+                        print_declarator(entry->type_information));
+        }
+    }
+    else
+    {
+        DEBUG_CODE()
+        {
+            fprintf(stderr,
+                    "BUILDSCOPE: Type of '%s' could not be updated (possibly "
+                    "due to implicit none)\n",
+                    entry->symbol_name);
+        }
+    }
+
+    // We need to add every symbol again in case a later IMPLICIT appears.
+    // FIXME - This is not very smart: we should make this update once after no
+    // more IMPLICIT can appear.
+    add_symbol_type_not_firm_yet(decl_context, entry);
+
+    DELETE(data);
+}
+
 static void build_scope_implicit_stmt(AST a, const decl_context_t* decl_context, nodecl_t* nodecl_output UNUSED_PARAMETER)
 {
     // We handle AST_IMPLICIT_STATEMENT and AST_IMPLICIT_NONE_STATEMENT here.
@@ -7290,7 +7423,10 @@ static void build_scope_implicit_stmt(AST a, const decl_context_t* decl_context,
             }
         }
     }
-    update_untyped_symbols(decl_context);
+
+    build_scope_delay_list_run(
+            DELAY_AFTER_IMPLICIT_STATEMENT,
+            /* nodecl_out */ NULL);
 }
 
 static void build_scope_import_stmt(AST a, 
@@ -7348,6 +7484,7 @@ static void build_scope_intent_stmt(AST a, const decl_context_t* decl_context,
 
         if (!symbol_is_parameter_of_function(entry, decl_context->current_scope->related_entry))
         {
+            // We do this because of ENTRY.
             add_intent_declared_symbol(decl_context, entry);
         }
 
@@ -7472,8 +7609,6 @@ static scope_entry_list_t* build_scope_single_interface_specification(
                 // Add this symbol to the return list
                 result_entry_list = entry_list_add(result_entry_list, entry);
 
-                remove_unknown_kind_symbol(decl_context, entry);
-
                 if (generic_spec != NULL)
                 {
                     P_LIST_ADD((*related_symbols),
@@ -7554,9 +7689,6 @@ static scope_entry_list_t* build_scope_single_interface_specification(
                     (*num_related_symbols),
                     entry);
         }
-
-        remove_untyped_symbol(decl_context, entry);
-        remove_unknown_kind_symbol(decl_context, entry);
     }
     else if (ASTKind(interface_specification) == AST_PRAGMA_CUSTOM_CONSTRUCT)
     {
@@ -7693,12 +7825,8 @@ static void build_scope_interface_block(AST a,
             generic_spec_sym->locus = ast_get_locus(generic_spec);
         }
 
-        // The symbol won't be unknown anymore
-        remove_untyped_symbol(decl_context, generic_spec_sym);
-
         generic_spec_sym->kind = SK_GENERIC_NAME;
         symbol_entity_specs_set_is_implicit_basic_type(generic_spec_sym, 0);
-        remove_unknown_kind_symbol(decl_context, generic_spec_sym);
 
         // Set the access properly if the symbol has already been seen and we already know its access
         // (See coment above where we set previous_generic_spec_sym)
@@ -7835,7 +7963,6 @@ static void build_scope_intrinsic_stmt(AST a,
         }
 
         copy_intrinsic_function_info(entry, entry_intrinsic);
-        remove_unknown_kind_symbol(decl_context, entry);
     }
 }
 
@@ -7891,8 +8018,6 @@ static void build_scope_namelist_stmt(AST a, const decl_context_t* decl_context,
 
         new_namelist->kind = SK_NAMELIST;
         new_namelist->locus = ast_get_locus(a);
-
-        remove_unknown_kind_symbol(decl_context, new_namelist);
 
         AST it2;
         for_each_element(namelist_group_object_list, it2)
@@ -8032,15 +8157,19 @@ static void build_scope_parameter_stmt(AST a, const decl_context_t* decl_context
         if (entry->kind == SK_UNDEFINED)
         {
             entry->kind = SK_VARIABLE;
-            remove_unknown_kind_symbol(decl_context, entry);
         }
 
         if (fortran_is_array_type(entry->type_information))
         {
             // We need to "undelay" this symbol
-            build_scope_delay_list_advance(entry, delayed_array_specifier_cmp,
-                    // we do not want it to be non-constant
-                    /* nodecl_output */ NULL);
+            // FIXME: This is a hack that we should remove some day.
+            build_scope_delay_list_run_now(
+                DELAY_AFTER_DECLARATIONS,
+                entry,
+                delayed_compute_type_from_array_spec,
+                delayed_array_specifier_cmp,
+                // we do not want it to be non-constant
+                /* nodecl_output */ NULL);
         }
 
         nodecl_t nodecl_init = nodecl_null();
@@ -8092,7 +8221,6 @@ static void build_scope_cray_pointer_stmt(AST a, const decl_context_t* decl_cont
         if (pointer_entry->kind == SK_UNDEFINED)
         {
             pointer_entry->kind = SK_VARIABLE;
-            remove_unknown_kind_symbol(decl_context, pointer_entry);
 
             // This nodecl is needed only for choose_int_type_from_kind
             nodecl_t nodecl_sym = nodecl_make_symbol(pointer_entry, ast_get_locus(a));
@@ -8159,7 +8287,6 @@ static void build_scope_cray_pointer_stmt(AST a, const decl_context_t* decl_cont
                     /* allow_nonconstant */ 1);
 
             pointee_entry->kind = SK_VARIABLE;
-            remove_unknown_kind_symbol(decl_context, pointee_entry);
         }
 
         // We would change it into a SK_VARIABLE but it could be a function, so leave it undefined
@@ -8229,7 +8356,6 @@ static void build_scope_pointer_stmt(AST a, const decl_context_t* decl_context,
         if (entry->kind == SK_UNDEFINED)
         {
             entry->kind = SK_VARIABLE;
-            remove_unknown_kind_symbol(decl_context, entry);
         }
 
         if (entry->kind == SK_FUNCTION)
@@ -8342,7 +8468,7 @@ static void synthesize_procedure_type(
         scope_entry_t* entry,
         scope_entry_t* interface,
         type_t* return_type,
-        const decl_context_t* decl_context,
+        UNUSED_PARAMETER const decl_context_t* decl_context,
         char do_pointer)
 {
     char was_ref = is_lvalue_reference_type(entry->type_information);
@@ -8359,7 +8485,6 @@ static void synthesize_procedure_type(
         {
             new_type = get_nonproto_function_type(return_type, 0);
             symbol_entity_specs_set_is_implicit_basic_type(entry, 0);
-            remove_untyped_symbol(decl_context, entry);
         }
 
         entry->type_information = new_type;
@@ -8503,7 +8628,6 @@ static void build_scope_procedure_decl_stmt(AST a, const decl_context_t* decl_co
                 {
                     entry->kind = SK_VARIABLE;
                 }
-                remove_unknown_kind_symbol(decl_context, entry);
 
                 synthesize_procedure_type(entry, interface, return_type, decl_context,
                         /* do_pointer */ 0);
@@ -8538,7 +8662,6 @@ static void build_scope_procedure_decl_stmt(AST a, const decl_context_t* decl_co
             else
             {
                 entry->kind = SK_VARIABLE;
-                remove_unknown_kind_symbol(decl_context, entry);
 
                 synthesize_procedure_type(entry, interface, return_type, decl_context,
                         /* do_pointer */ 1);
@@ -8692,7 +8815,6 @@ static void build_scope_save_stmt(AST a, const decl_context_t* decl_context, nod
         if (entry->kind == SK_UNDEFINED)
         {
             entry->kind = SK_VARIABLE;
-            remove_unknown_kind_symbol(decl_context, entry);
         }
         symbol_entity_specs_set_is_static(entry, 1);
     }
@@ -8717,7 +8839,6 @@ static void build_scope_stmt_function_stmt(AST a, const decl_context_t* decl_con
 
     entry->kind = SK_FUNCTION;
     symbol_entity_specs_set_is_stmt_function(entry, 1);
-    remove_unknown_kind_symbol(decl_context, entry);
 
     int num_dummy_arguments = 0;
     if (dummy_arg_name_list != NULL)
@@ -8738,7 +8859,6 @@ static void build_scope_stmt_function_stmt(AST a, const decl_context_t* decl_con
             if (dummy_arg->kind == SK_UNDEFINED)
             {
                 dummy_arg->kind = SK_VARIABLE;
-                remove_unknown_kind_symbol(decl_context, dummy_arg);
             }
 
             symbol_set_as_parameter_of_function(dummy_arg, entry,
@@ -8906,7 +9026,6 @@ static void build_scope_target_stmt(AST a, const decl_context_t* decl_context, n
         if (entry->kind == SK_UNDEFINED)
         {
             entry->kind = SK_VARIABLE;
-            remove_unknown_kind_symbol(decl_context, entry);
         }
         symbol_entity_specs_set_is_target(entry, 1);
     }
@@ -8991,10 +9110,7 @@ static void build_scope_declaration_common_stmt(AST a, const decl_context_t* dec
                 fatal_printf_at(ast_get_locus(declaration), "TYPEDEF would overwrite a non undefined entity\n");
             }
             entry->kind = SK_TYPEDEF;
-            remove_unknown_kind_symbol(decl_context, entry);
         }
-
-        remove_untyped_symbol(decl_context, entry);
 
         entry->type_information = fortran_update_basic_type_with_type(entry->type_information, basic_type);
         symbol_entity_specs_set_is_implicit_basic_type(entry, 0);
@@ -9129,7 +9245,6 @@ static void build_scope_declaration_common_stmt(AST a, const decl_context_t* dec
             {
                 // From now this entity is only a variable
                 entry->kind = SK_VARIABLE;
-                remove_unknown_kind_symbol(decl_context, entry);
             }
 
             if (!is_error_type(entry->type_information))
@@ -9169,6 +9284,7 @@ static void build_scope_declaration_common_stmt(AST a, const decl_context_t* dec
         {
             if (!symbol_is_parameter_of_function(entry, decl_context->current_scope->related_entry))
             {
+                // We do this because of ENTRY.
                 add_intent_declared_symbol(decl_context, entry);
             }
 
@@ -9194,7 +9310,6 @@ static void build_scope_declaration_common_stmt(AST a, const decl_context_t* dec
             }
             symbol_entity_specs_set_is_allocatable(entry, 1);
             entry->kind = SK_VARIABLE;
-            remove_unknown_kind_symbol(decl_context, entry);
         }
 
         if (symbol_entity_specs_get_is_allocatable(entry)
@@ -9252,7 +9367,6 @@ static void build_scope_declaration_common_stmt(AST a, const decl_context_t* dec
                 {
                     entry->kind = SK_VARIABLE;
                 }
-                remove_unknown_kind_symbol(decl_context, entry);
             }
         }
 
@@ -9273,8 +9387,6 @@ static void build_scope_declaration_common_stmt(AST a, const decl_context_t* dec
             {
                 entry->kind = SK_VARIABLE;
                 symbol_entity_specs_set_is_extern(entry, 0);
-
-                remove_unknown_kind_symbol(decl_context, entry);
 
                 char was_ref = is_lvalue_reference_type(entry->type_information);
                 entry->type_information = get_pointer_type(no_ref(entry->type_information));
@@ -9315,7 +9427,6 @@ static void build_scope_declaration_common_stmt(AST a, const decl_context_t* dec
         if (initialization != NULL)
         {
             entry->kind = SK_VARIABLE;
-            remove_unknown_kind_symbol(decl_context, entry);
             nodecl_t nodecl_init = nodecl_null();
 
             if (ASTKind(initialization) == AST_POINTER_INITIALIZATION
@@ -9422,7 +9533,6 @@ static void build_scope_declaration_common_stmt(AST a, const decl_context_t* dec
             else if (entry->kind == SK_UNDEFINED)
             {
                 entry->kind = SK_VARIABLE;
-                remove_unknown_kind_symbol(decl_context, entry);
             }
             else
             {
@@ -9451,7 +9561,8 @@ static void build_scope_declaration_common_stmt(AST a, const decl_context_t* dec
                     decl_context,
                     num_delayed_character_symbols,
                     delayed_character_symbols);
-        build_scope_delay_list_add(delayed_compute_character_length, data);
+        build_scope_delay_list_add(
+            DELAY_AFTER_DECLARATIONS, delayed_compute_character_length, data);
 
         DELETE(delayed_character_symbols);
         delayed_character_symbols = NULL;
@@ -9541,7 +9652,7 @@ scope_entry_t* insert_symbol_from_module(scope_entry_t* entry,
     // The reason is that we need to know this symbol comes from a module
     // and its precise USE name, not the original symbol name
     scope_entry_t* current_symbol = NULL;
-    current_symbol = new_fortran_symbol(decl_context, local_name);
+    current_symbol = new_fortran_symbol_not_unknown(decl_context, local_name);
 
     // Copy everything and restore the name
     *current_symbol = *entry;
@@ -9549,11 +9660,6 @@ scope_entry_t* insert_symbol_from_module(scope_entry_t* entry,
 
     // Restore original context
     current_symbol->decl_context = decl_context;
-
-    if (current_symbol->kind != SK_UNDEFINED)
-    {
-        remove_unknown_kind_symbol(decl_context, current_symbol);
-    }
 
     current_symbol->symbol_name = local_name;
     current_symbol->locus = locus;
@@ -9935,7 +10041,6 @@ static void build_scope_value_stmt(AST a, const decl_context_t* decl_context, no
         if (entry->kind == SK_UNDEFINED)
         {
             entry->kind = SK_VARIABLE;
-            remove_unknown_kind_symbol(decl_context, entry);
         }
         if (is_lvalue_reference_type(entry->type_information))
         {
@@ -9964,7 +10069,6 @@ static void build_scope_volatile_stmt(AST a, const decl_context_t* decl_context,
         if (entry->kind == SK_UNDEFINED)
         {
             entry->kind = SK_VARIABLE;
-            remove_unknown_kind_symbol(decl_context, entry);
         }
         char is_ref = is_lvalue_reference_type(entry->type_information);
 

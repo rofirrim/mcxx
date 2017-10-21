@@ -4595,7 +4595,9 @@ OPERATOR_TABLE
         }
         else
         {
-            internal_error("Unexpected symbol '%s'\n", symbol_kind_name(entry.get_internal_symbol()));
+            internal_error("Unexpected symbol '%s' of kind '%s'\n",
+                           entry.get_name().c_str(),
+                           symbol_kind_name(entry.get_internal_symbol()));
         }
     }
 

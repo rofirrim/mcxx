@@ -416,7 +416,6 @@ static void check_ac_value_list(
             if (do_variable->kind == SK_UNDEFINED)
             {
                 do_variable->kind = SK_VARIABLE;
-                remove_unknown_kind_symbol(decl_context, do_variable);
             }
             else if (do_variable->kind != SK_VARIABLE)
             {
@@ -4178,8 +4177,6 @@ static void check_symbol_of_called_name(AST sym,
                 entry->kind = SK_FUNCTION;
                 entry->locus = ast_get_locus(sym);
                 entry->type_information = get_nonproto_function_type(get_void_type(), 0);
-
-                remove_unknown_kind_symbol(decl_context, entry);
             }
             else
             {
@@ -4197,8 +4194,6 @@ static void check_symbol_of_called_name(AST sym,
                     entry->kind = SK_FUNCTION;
                     entry->type_information =
                         get_nonproto_function_type(get_implicit_type_for_symbol(decl_context, entry->symbol_name), 0);
-
-                    remove_unknown_kind_symbol(decl_context, entry);
                 }
             }
 
@@ -4224,7 +4219,6 @@ static void check_symbol_of_called_name(AST sym,
             {
                 // Make it a function
                 entry->kind = SK_FUNCTION;
-                remove_unknown_kind_symbol(decl_context, entry);
 
                 scope_entry_t * intrinsic_sym = NULL;
 
@@ -4258,8 +4252,6 @@ static void check_symbol_of_called_name(AST sym,
                      * intrinsic using an INTRINSIC :: SQRT statement.
                      */
 
-                    remove_untyped_symbol(decl_context, entry);
-
                     scope_entry_t* intrinsic_symbol = symbol_entity_specs_get_alias_to(entry);
                     copy_intrinsic_function_info(entry, intrinsic_symbol);
                 }
@@ -4276,8 +4268,6 @@ static void check_symbol_of_called_name(AST sym,
                     {
                         entry->type_information = get_nonproto_function_type(entry->type_information, 0);
 
-                        // This symbol is not untyped anymore
-                        remove_untyped_symbol(decl_context, entry);
                         // nor its type can be redefined (this would never happen in real Fortran because of statement ordering)
                         symbol_entity_specs_set_is_implicit_basic_type(entry, 0);
                     }
@@ -4313,8 +4303,6 @@ static void check_symbol_of_called_name(AST sym,
                             entry->type_information = lvalue_ref(entry->type_information);
                     }
 
-                    // This symbol is not untyped anymore
-                    remove_untyped_symbol(decl_context, entry);
                     // nor its type can be redefined (this would never happen in real Fortran because of statement ordering)
                     symbol_entity_specs_set_is_implicit_basic_type(entry, 0);
                 }
@@ -4500,10 +4488,6 @@ static void check_symbol_of_argument(AST sym, const decl_context_t* decl_context
                 entry = new_fortran_symbol(decl_context, ASTText(sym));
                 entry->locus = ast_get_locus(sym);
                 entry->type_information = get_implicit_none_type();
-
-                // This is actually an implicit none, so it is actually
-                // something untyped!
-                add_untyped_symbol(decl_context, entry);
             }
 
             // Remember the intrinsic we named
@@ -4562,7 +4546,6 @@ static void check_symbol_of_argument(AST sym, const decl_context_t* decl_context
             // because later an EXTERNAL might have turned it into a SK_FUNCTION 
             // (this is the case of 'Y' shown above)
             entry->kind = SK_VARIABLE;
-            remove_unknown_kind_symbol(decl_context, entry);
 
             check_symbol_name_as_a_variable(sym, entry, decl_context, nodecl_output);
         }
@@ -4623,7 +4606,6 @@ static void check_symbol(AST expr, const decl_context_t* decl_context, nodecl_t*
             || entry->kind == SK_UNDEFINED)
     {
         entry->kind = SK_VARIABLE;
-        remove_unknown_kind_symbol(decl_context, entry);
         check_symbol_name_as_a_variable(expr, entry, decl_context, nodecl_output);
     }
     else if (entry->kind == SK_FUNCTION)
