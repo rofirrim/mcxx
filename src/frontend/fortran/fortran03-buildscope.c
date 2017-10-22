@@ -2682,6 +2682,8 @@ static void build_scope_program_unit_body_declarations(
         nodecl_t* nodecl_output)
 {
     char still_possible_use_stmt = 1;
+    char seen_implicit = 0;
+    char still_possible_implicit_stmt = 1;
     if (program_unit_stmts != NULL)
     {
         AST it;
@@ -2710,9 +2712,27 @@ static void build_scope_program_unit_body_declarations(
             if (still_possible_use_stmt
                 && !(*constraint_checker->current_order_class & SOC_USE))
             {
-                // Run delayed actions that can be run once we have seen a USE
+                // Run delayed actions that must happen after all USE statements.
                 still_possible_use_stmt = 0;
                 build_scope_delay_list_run(DELAY_AFTER_USE_STATEMENT,
+                                           /* nodecl_output */ NULL);
+            }
+
+            if (statement_get_order_class(stmt) == SOC_IMPLICIT
+                || statement_get_order_class(stmt) == SOC_IMPLICIT_NONE)
+            {
+                seen_implicit = 1;
+            }
+
+            if (seen_implicit && still_possible_implicit_stmt
+                && !(*constraint_checker->current_order_class & SOC_IMPLICIT)
+                && !(*constraint_checker->current_order_class
+                     & SOC_IMPLICIT_NONE))
+            {
+                // Run delayed actions that must happen after all IMPLICIT
+                // statements.
+                still_possible_implicit_stmt = 0;
+                build_scope_delay_list_run(DELAY_AFTER_IMPLICIT_STATEMENT,
                                            /* nodecl_output */ NULL);
             }
 
@@ -2728,12 +2748,19 @@ static void build_scope_program_unit_body_declarations(
         }
     }
 
-    // If all what we have seen before executables are USE, just 
-    // run the delayed actions now.
     if (still_possible_use_stmt)
     {
+        // Run delayed actions that must happen after all USE statements.
         still_possible_use_stmt = 0;
         build_scope_delay_list_run(DELAY_AFTER_USE_STATEMENT,
+                /* nodecl_output */ NULL);
+    }
+
+    if (seen_implicit && still_possible_implicit_stmt)
+    {
+        // Run delayed actions that must happen after all IMPLICIT statements.
+        still_possible_implicit_stmt = 0;
+        build_scope_delay_list_run(DELAY_AFTER_IMPLICIT_STATEMENT,
                 /* nodecl_output */ NULL);
     }
 }
@@ -7341,11 +7368,6 @@ static void delay_update_implicit_type(void *data,
         }
     }
 
-    // We need to add every symbol again in case a later IMPLICIT appears.
-    // FIXME - This is not very smart: we should make this update once after no
-    // more IMPLICIT can appear.
-    add_delay_update_type_on_implicit_stmt(decl_context, entry);
-
     DELETE(data);
 }
 
@@ -7441,10 +7463,6 @@ static void build_scope_implicit_stmt(AST a, const decl_context_t* decl_context,
             }
         }
     }
-
-    build_scope_delay_list_run(
-            DELAY_AFTER_IMPLICIT_STATEMENT,
-            /* nodecl_out */ NULL);
 }
 
 static void build_scope_import_stmt(AST a, 
