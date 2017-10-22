@@ -15,7 +15,10 @@ before_install:
     - ./scripts/install-nanox.sh
 script:
     - "autoreconf -fiv &&
-    ./configure CC=\"ccache gcc-6\" CXX=\"ccache g++-6\" GFORTRAN=gfortran-6 FC=gfortran-6 LLVM_CONFIG=\"/usr/bin/llvm-config-4.0\" --prefix=$HOME/mcxx-install --enable-fortran-llvm-codegen --enable-ompss --with-nanox=$HOME/nanox-install &&
+      cd .. &&
+      rm -fr mcxx-build &&
+      cd mcxx-build &&
+    ../mcxx-src/configure CC=\"ccache gcc-6\" CXX=\"ccache g++-6\" GFORTRAN=gfortran-6 FC=gfortran-6 LLVM_CONFIG=\"/usr/bin/llvm-config-4.0\" --prefix=$HOME/mcxx-install --enable-fortran-llvm-codegen --enable-ompss --with-nanox=$HOME/nanox-install &&
     make -j$(nproc) &&
     make install &&
     make check"
