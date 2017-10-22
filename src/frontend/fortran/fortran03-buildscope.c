@@ -2059,17 +2059,32 @@ static void delay_check_has_type_spec(void *data,
     DELETE(info);
 }
 
-static void add_delay_check_symbol_needs_type_specifier(
-    UNUSED_PARAMETER const decl_context_t *decl_context, scope_entry_t *entry)
+static void add_delay_check_symbol_needs_type_specifier_(
+    build_scope_delay_category_t delay_category,
+    UNUSED_PARAMETER const decl_context_t *decl_context,
+    scope_entry_t *entry)
 {
     check_has_type_spec_info_t *check_has_type_spec_info
         = NEW0(check_has_type_spec_info_t);
     check_has_type_spec_info->entry = entry;
     // check_has_type_spec_info->decl_context = decl_context;
 
-    build_scope_delay_list_add(DELAY_AFTER_DECLARATIONS,
-                               delay_check_has_type_spec,
-                               check_has_type_spec_info);
+    build_scope_delay_list_add(
+        delay_category, delay_check_has_type_spec, check_has_type_spec_info);
+}
+
+static void add_delay_check_symbol_needs_type_specifier(
+    UNUSED_PARAMETER const decl_context_t *decl_context, scope_entry_t *entry)
+{
+    add_delay_check_symbol_needs_type_specifier_(DELAY_AFTER_DECLARATIONS,
+            decl_context, entry);
+}
+
+void add_delay_check_symbol_needs_type_specifier_at_end(
+    UNUSED_PARAMETER const decl_context_t *decl_context, scope_entry_t *entry)
+{
+    add_delay_check_symbol_needs_type_specifier_(DELAY_AFTER_PROGRAM_UNIT,
+            decl_context, entry);
 }
 
 static scope_entry_t* new_procedure_symbol(

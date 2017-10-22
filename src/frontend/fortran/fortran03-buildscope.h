@@ -68,6 +68,8 @@ LIBMF03_EXTERN scope_entry_t* fortran_query_label(AST label,
         char is_definition);
 
 LIBMF03_EXTERN void add_unknown_kind_symbol(const decl_context_t* decl_context, scope_entry_t* entry);
+LIBMF03_EXTERN void add_delay_check_symbol_needs_type_specifier_at_end(
+    const decl_context_t *decl_context, scope_entry_t *entry);
 
 LIBMF03_EXTERN scope_entry_t* query_common_name(const decl_context_t* decl_context, const char* common_name,
         const locus_t* locus);

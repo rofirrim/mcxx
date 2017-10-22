@@ -4488,6 +4488,11 @@ static void check_symbol_of_argument(AST sym, const decl_context_t* decl_context
                 entry = new_fortran_symbol(decl_context, ASTText(sym));
                 entry->locus = ast_get_locus(sym);
                 entry->type_information = get_implicit_none_type();
+
+                // Make sure this gets a proper type.
+                symbol_entity_specs_set_is_implicit_basic_type(entry, 1);
+                add_delay_check_symbol_needs_type_specifier_at_end(decl_context,
+                                                                   entry);
             }
 
             // Remember the intrinsic we named

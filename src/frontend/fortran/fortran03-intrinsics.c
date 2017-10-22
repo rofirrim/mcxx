@@ -1409,6 +1409,7 @@ void copy_intrinsic_function_info(scope_entry_t* entry, scope_entry_t* intrinsic
 {
     entry->kind = intrinsic->kind;
     entry->type_information = intrinsic->type_information;
+    symbol_entity_specs_set_is_implicit_basic_type(entry, 0);
 
 #define COPY_SPEC(x) \
     symbol_entity_specs_set_##x(entry, symbol_entity_specs_get_##x(intrinsic))
