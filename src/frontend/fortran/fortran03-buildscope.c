@@ -1304,7 +1304,7 @@ static void delay_review_symbol_has_known_kind(
     }
 }
 
-void add_unknown_kind_symbol(
+void add_delay_check_kind_of_symbol(
     UNUSED_PARAMETER const decl_context_t *decl_context, scope_entry_t *entry)
 {
     build_scope_delay_list_add(
@@ -1343,7 +1343,7 @@ static void delay_check_symbol_is_parameter(
     DELETE(data);
 }
 
-static void add_intent_declared_symbol(const decl_context_t *decl_context,
+static void add_delay_check_symbol_is_dummy(const decl_context_t *decl_context,
                                        scope_entry_t *entry)
 {
     delay_check_is_parameter_t *param_info = NEW0(delay_check_is_parameter_t);
@@ -1402,7 +1402,7 @@ static void delay_check_fully_defined_symbol(
     }
 }
 
-static void add_not_fully_defined_symbol(
+static void add_delay_check_fully_defined_symbol(
         UNUSED_PARAMETER const decl_context_t *decl_context,
         scope_entry_t* entry)
 {
@@ -1990,7 +1990,7 @@ static type_t* fortran_gather_type_from_declaration_type_spec_of_component(AST a
             scope_entry_t* entry = get_symbol_for_name(decl_context, name, ASTText(name));
             entry->kind = SK_CLASS;
 
-            add_not_fully_defined_symbol(decl_context, entry);
+            add_delay_check_fully_defined_symbol(decl_context, entry);
 
             result = get_user_defined_type(entry);
         }
@@ -2022,7 +2022,7 @@ static void delay_update_implicit_type(void *data,
 // base type (what Fortran calls the type). Because of the ordering of
 // the instructions, only a few symbols whose name occurs before an IMPLICIT 
 // statement, is required.
-static void add_symbol_type_not_firm_yet(const decl_context_t *decl_context,
+static void add_delay_update_type_on_implicit_stmt(const decl_context_t *decl_context,
                                          scope_entry_t *entry)
 {
     implicit_update_info_t *implicit_info = NEW0(implicit_update_info_t);
@@ -2155,7 +2155,7 @@ static scope_entry_t* new_procedure_symbol(
 
     entry->locus = ast_get_locus(name);
     symbol_entity_specs_set_is_implicit_basic_type(entry, 1);
-    add_symbol_type_not_firm_yet(decl_context, entry);
+    add_delay_update_type_on_implicit_stmt(decl_context, entry);
     entry->defined = 1;
 
     if (entry->decl_context->current_scope == decl_context->global_scope)
@@ -2290,7 +2290,7 @@ static scope_entry_t* new_procedure_symbol(
                 // Get a reference to its type (it will be properly updated later)
                 dummy_arg->type_information = get_lvalue_reference_type(dummy_arg->type_information);
 
-                add_symbol_type_not_firm_yet(program_unit_context, dummy_arg);
+                add_delay_update_type_on_implicit_stmt(program_unit_context, dummy_arg);
             }
 
             dummy_arg->locus = ast_get_locus(dummy_arg_name);
@@ -2329,7 +2329,7 @@ static scope_entry_t* new_procedure_symbol(
             symbol_entity_specs_set_is_result_var(result_sym, 1);
 
             symbol_entity_specs_set_is_implicit_basic_type(result_sym, 1);
-            add_symbol_type_not_firm_yet(program_unit_context, result_sym);
+            add_delay_update_type_on_implicit_stmt(program_unit_context, result_sym);
 
             result_sym->type_information = return_type;
 
@@ -2360,7 +2360,7 @@ static scope_entry_t* new_procedure_symbol(
 
         result_sym->type_information = return_type;
         symbol_entity_specs_set_is_implicit_basic_type(result_sym, 1);
-        add_symbol_type_not_firm_yet(program_unit_context, result_sym);
+        add_delay_update_type_on_implicit_stmt(program_unit_context, result_sym);
 
         return_type = get_mutable_indirect_type(result_sym);
 
@@ -2468,7 +2468,7 @@ static scope_entry_t* new_entry_symbol(const decl_context_t* decl_context,
     entry->locus = ast_get_locus(name);
     symbol_entity_specs_set_is_entry(entry, 1);
     symbol_entity_specs_set_is_implicit_basic_type(entry, 1);
-    add_symbol_type_not_firm_yet(principal_procedure->decl_context, entry);
+    add_delay_update_type_on_implicit_stmt(principal_procedure->decl_context, entry);
     entry->defined = 1;
 
     if (principal_procedure->decl_context->current_scope == principal_procedure->decl_context->global_scope)
@@ -7344,7 +7344,7 @@ static void delay_update_implicit_type(void *data,
     // We need to add every symbol again in case a later IMPLICIT appears.
     // FIXME - This is not very smart: we should make this update once after no
     // more IMPLICIT can appear.
-    add_symbol_type_not_firm_yet(decl_context, entry);
+    add_delay_update_type_on_implicit_stmt(decl_context, entry);
 
     DELETE(data);
 }
@@ -7503,7 +7503,7 @@ static void build_scope_intent_stmt(AST a, const decl_context_t* decl_context,
         if (!symbol_is_parameter_of_function(entry, decl_context->current_scope->related_entry))
         {
             // We do this because of ENTRY.
-            add_intent_declared_symbol(decl_context, entry);
+            add_delay_check_symbol_is_dummy(decl_context, entry);
         }
 
         if (symbol_entity_specs_get_intent_kind(entry) != INTENT_INVALID)
@@ -7618,7 +7618,7 @@ static scope_entry_list_t* build_scope_single_interface_specification(
                     entry = create_fortran_symbol_for_name_(decl_context,
                             procedure_name, strtolower(ASTText(procedure_name)), /*no_implicit*/ 1);
 
-                    add_not_fully_defined_symbol(decl_context, entry);
+                    add_delay_check_fully_defined_symbol(decl_context, entry);
                 }
 
                 entry->kind = SK_FUNCTION;
@@ -8822,7 +8822,7 @@ static void build_scope_save_stmt(AST a, const decl_context_t* decl_context, nod
                 entry = new_common(decl_context,ASTText(ASTSon0(saved_entity)));
                 entry->locus = ast_get_locus(a);
 
-                add_not_fully_defined_symbol(decl_context, entry);
+                add_delay_check_fully_defined_symbol(decl_context, entry);
             }
         }
         else
@@ -9303,7 +9303,7 @@ static void build_scope_declaration_common_stmt(AST a, const decl_context_t* dec
             if (!symbol_is_parameter_of_function(entry, decl_context->current_scope->related_entry))
             {
                 // We do this because of ENTRY.
-                add_intent_declared_symbol(decl_context, entry);
+                add_delay_check_symbol_is_dummy(decl_context, entry);
             }
 
             symbol_entity_specs_set_intent_kind(entry, current_attr_spec.intent_kind);
