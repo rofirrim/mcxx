@@ -166,6 +166,13 @@ static void build_scope_delay_list_run(
     }
 
     DELETE(copy_delayed);
+
+    // It may happen that the delayed actions have added more actions in this
+    // category, so run it again if this is the case.
+    if (delay_list->categories[delay_category].num_delayed != 0)
+    {
+        build_scope_delay_list_run(delay_category, nodecl_output);
+    }
 }
 
 static void build_scope_delay_list_add(
@@ -812,13 +819,102 @@ static delayed_character_length_t* delayed_character_length_new(
     return result;
 }
 
+static type_t *compute_character_length_type(AST character_length,
+                                             type_t *character_type,
+                                             const decl_context_t *decl_context,
+                                             char *is_star,
+                                             char *is_colon)
+{
+    ERROR_CONDITION(!fortran_is_character_type(character_type),
+                    "This must be a CHARACTER type",
+                    0);
+
+    nodecl_t nodecl_len = nodecl_null();
+    *is_star = 0;
+    *is_colon = 0;
+
+    if (ASTKind(character_length) == AST_SYMBOL
+        && strcmp(ASTText(character_length), "*") == 0)
+    {
+        *is_star = 1;
+    }
+    else if (ASTKind(character_length) == AST_SYMBOL
+             && strcmp(ASTText(character_length), ":") == 0)
+    {
+        *is_colon = 1;
+    }
+    else
+    {
+        fortran_check_expression(character_length, decl_context, &nodecl_len);
+    }
+
+    if (*is_star)
+    {
+        // No need to do anything because
+        // fortran_gather_type_from_declaration_type_spec_ already returns an
+        // unknown size character array.
+        return character_type;
+    }
+    else if (*is_colon)
+    {
+        // Replace the array with one with descriptor.
+        type_t *updated_char_type = get_array_type_bounds_with_descriptor(
+            array_type_get_element_type(character_type),
+            nodecl_null(),
+            nodecl_null(),
+            decl_context);
+        return updated_char_type;
+    }
+    else if (nodecl_is_err_expr(nodecl_len))
+    {
+        return get_error_type();
+    }
+    else
+    {
+        nodecl_len = fortran_expression_as_value(nodecl_len);
+        nodecl_t lower_bound = nodecl_make_integer_literal(
+            get_signed_int_type(),
+            const_value_get_one(type_get_size(get_signed_int_type()), 1),
+            nodecl_get_locus(nodecl_len));
+        return get_array_type_bounds(
+            array_type_get_element_type(character_type),
+            lower_bound,
+            nodecl_len,
+            decl_context);
+    }
+}
+
+static void delay_character_check_is_dummy_or_parameter(void *info,
+        UNUSED_PARAMETER nodecl_t *nodecl_output)
+{
+    scope_entry_t *entry = (scope_entry_t*)info;
+    if (!is_const_qualified_type(entry->type_information)
+            && !symbol_is_parameter_of_function(entry, entry->decl_context->current_scope->related_entry))
+    {
+        error_printf_at(entry->locus,
+                "'%s' has assumed CHARACTER length but is not a dummy argument or a parameter\n",
+                entry->symbol_name);
+    }
+}
+
+static void delay_character_check_is_allocatable_or_pointer(void *info,
+        UNUSED_PARAMETER nodecl_t *nodecl_output)
+{
+    scope_entry_t *entry = (scope_entry_t*)info;
+    if (!symbol_entity_specs_get_is_allocatable(entry)
+            && !is_pointer_type(no_ref(entry->type_information)))
+    {
+        error_printf_at(entry->locus,
+                "'%s' has deferred CHARACTER length but is not ALLOCATABLE or POINTER\n",
+                entry->symbol_name);
+    }
+}
+
 static void delayed_compute_character_length(
     void *info, nodecl_t *nodecl_output UNUSED_PARAMETER)
 {
-
     delayed_character_length_t *data = (delayed_character_length_t *)info;
 
-    nodecl_t nodecl_len = nodecl_null();
     char is_star = 0;
     char is_colon = 0;
 
@@ -829,52 +925,12 @@ static void delayed_compute_character_length(
                 prettyprint_in_buffer(data->length));
     }
 
-    if (ASTKind(data->length) == AST_SYMBOL
-        && strcmp(ASTText(data->length), "*") == 0)
-    {
-        is_star = 1;
-    }
-    else if (ASTKind(data->length) == AST_SYMBOL
-             && strcmp(ASTText(data->length), ":") == 0)
-    {
-        is_colon = 1;
-    }
-    else
-    {
-        fortran_check_expression(data->length, data->decl_context, &nodecl_len);
-    }
+    type_t *updated_char_type = compute_character_length_type(
+        data->length, data->character_type, data->decl_context,
+        &is_star,
+        &is_colon);
 
-    if (is_star || is_colon)
-    {
-        int i;
-        for (i = 0; i < data->num_symbols; i++)
-        {
-            scope_entry_t *current_symbol = data->symbols[i];
-            if (is_star)
-            {
-                // FIXME - We should check this is either a DUMMY or a PARAMETER of CHARACTER(*)
-            }
-            else if (is_colon)
-            {
-                // FIXME - We should check this is either an ALLOCATABLE or a POINTER
-
-                // Replace the array with one with descriptor.
-                type_t *updated_char_type = get_array_type_bounds_with_descriptor(
-                        array_type_get_element_type(data->character_type),
-                        nodecl_null(),
-                        nodecl_null(),
-                        current_symbol->decl_context);
-
-                current_symbol->type_information = delayed_character_length_update_type(
-                    current_symbol->type_information, updated_char_type);
-            }
-            else
-            {
-                internal_error("Code unreachable", 0);
-            }
-        }
-    }
-    else if (nodecl_is_err_expr(nodecl_len))
+    if (is_error_type(updated_char_type))
     {
         int i;
         for (i = 0; i < data->num_symbols; i++)
@@ -885,24 +941,30 @@ static void delayed_compute_character_length(
     }
     else
     {
-        nodecl_len = fortran_expression_as_value(nodecl_len);
-        nodecl_t lower_bound = nodecl_make_integer_literal(
-            get_signed_int_type(),
-            const_value_get_one(type_get_size(get_signed_int_type()), 1),
-            nodecl_get_locus(nodecl_len));
-        type_t *updated_char_type = get_array_type_bounds(
-            array_type_get_element_type(data->character_type),
-            lower_bound,
-            nodecl_len,
-            data->decl_context);
-
         int i;
         for (i = 0; i < data->num_symbols; i++)
         {
             scope_entry_t *current_symbol = data->symbols[i];
-            current_symbol->type_information
-                = delayed_character_length_update_type(
-                    current_symbol->type_information, updated_char_type);
+            if (is_star)
+            {
+                build_scope_delay_list_add(DELAY_AFTER_DECLARATIONS,
+                                           delay_character_check_is_dummy_or_parameter,
+                                           current_symbol);
+            }
+            else
+            {
+                if (is_colon)
+                {
+                    build_scope_delay_list_add(
+                        DELAY_AFTER_DECLARATIONS,
+                        delay_character_check_is_allocatable_or_pointer,
+                        current_symbol);
+                }
+
+                current_symbol->type_information
+                    = delayed_character_length_update_type(
+                        current_symbol->type_information, updated_char_type);
+            }
         }
     }
 
@@ -1887,69 +1949,6 @@ type_t* fortran_gather_type_from_declaration_type_spec(AST a, const decl_context
     return fortran_gather_type_from_declaration_type_spec_(a, decl_context, character_length_out);
 }
 
-static type_t *compute_character_length_type(AST character_length,
-                                             type_t *character_type,
-                                             const decl_context_t *decl_context)
-{
-    ERROR_CONDITION(!fortran_is_character_type(character_type),
-                    "This must be a CHARACTER type",
-                    0);
-
-    // FIXME - This is duplicating the logic in delayed_compute_character_length
-    nodecl_t nodecl_len = nodecl_null();
-    char is_star = 0;
-    char is_colon = 0;
-
-    if (ASTKind(character_length) == AST_SYMBOL
-        && strcmp(ASTText(character_length), "*") == 0)
-    {
-        is_star = 1;
-    }
-    else if (ASTKind(character_length) == AST_SYMBOL
-             && strcmp(ASTText(character_length), ":") == 0)
-    {
-        is_colon = 1;
-    }
-    else
-    {
-        fortran_check_expression(character_length, decl_context, &nodecl_len);
-    }
-
-    if (is_star)
-    {
-        // No need to do anything because
-        // fortran_gather_type_from_declaration_type_spec_ already returns an
-        // unknown size character array.
-        return character_type;
-    }
-    else if (is_colon)
-    {
-        // Replace the array with one with descriptor.
-        type_t *updated_char_type = get_array_type_bounds_with_descriptor(
-            array_type_get_element_type(character_type),
-            nodecl_null(),
-            nodecl_null(),
-            decl_context);
-        return updated_char_type;
-    }
-    else if (nodecl_is_err_expr(nodecl_len))
-    {
-        return get_error_type();
-    }
-    else
-    {
-        nodecl_len = fortran_expression_as_value(nodecl_len);
-        nodecl_t lower_bound = nodecl_make_integer_literal(
-            get_signed_int_type(),
-            const_value_get_one(type_get_size(get_signed_int_type()), 1),
-            nodecl_get_locus(nodecl_len));
-        return get_array_type_bounds(
-            array_type_get_element_type(character_type),
-            lower_bound,
-            nodecl_len,
-            decl_context);
-    }
-}
 
 static type_t *fortran_gather_type_from_type_spec(
     AST a, const decl_context_t *decl_context)
@@ -1959,8 +1958,12 @@ static type_t *fortran_gather_type_from_type_spec(
         a, decl_context, &character_length_out);
     if (fortran_is_character_type(basic_type) && character_length_out != NULL)
     {
-        basic_type = compute_character_length_type(
-            character_length_out, basic_type, decl_context);
+        char is_star = 0, is_colon = 0;
+        basic_type = compute_character_length_type(character_length_out,
+                                                   basic_type,
+                                                   decl_context,
+                                                   &is_star,
+                                                   &is_colon);
     }
     return basic_type;
 }
