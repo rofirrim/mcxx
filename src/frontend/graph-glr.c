@@ -851,6 +851,15 @@ typedef struct stack_node_tag stack_node_t;
 struct stack_node_edge_tag;
 typedef struct stack_node_edge_tag stack_node_edge_t;
 
+// Payload of an edge
+typedef struct payload_tag payload_t;
+
+// The GSS itself, it keeps a list
+// of active parsers which are themselves
+// nodes of the GSS
+typedef struct stack_node_set_tag stack_node_set_t;
+
+// Simple reference counting mechanism.
 typedef struct ref_count_tag refcount_t;
 struct ref_count_tag
 {
@@ -900,9 +909,21 @@ struct stack_node_tag
     stack_node_edge_t **preds;
 };
 
+// A stack node edge refers to another stack node and has a payload
+struct stack_node_edge_tag
+{
+    /* private */ refcount_t _ref;
+    stack_node_t* target;
 
-// Payload of an edge
-typedef struct payload_tag payload_t;
+    payload_t *payload;
+};
+
+struct stack_node_set_tag
+{
+    int num_active_stacks;
+    stack_node_t **stacks;
+};
+
 
 // Two kinds of payloads for edges: those that immediately encode the
 // semantic value and those that defer the semantic value and only encode
@@ -999,25 +1020,6 @@ static inline char payload_is_shift(payload_t* p)
     return p->kind == P_DEFERRED_SHIFT
         || p->kind == P_DEFINITIVE_SHIFT;
 }
-
-// A stack node edge refers to another stack node and has a payload
-struct stack_node_edge_tag
-{
-    /* private */ refcount_t _ref;
-    stack_node_t* target;
-
-    payload_t *payload;
-};
-
-// The GSS itself, it keeps a list
-// of active parsers which are themselves
-// nodes of the GSS
-typedef struct stack_node_set_tag stack_node_set_t;
-struct stack_node_set_tag
-{
-    int num_active_stacks;
-    stack_node_t **stacks;
-};
 
 static stack_node_set_t gss;
 
@@ -1192,7 +1194,6 @@ static inline void compute_paths_rec(
 
         // copy the path
         stack_node_edge_t** qi_s = qi->path.edges;
-        it = &p;
         for (it = &p; it != NULL; it = it->pred, qi_s++)
         {
             *qi_s = it->edge;
@@ -1912,7 +1913,7 @@ static inline void do_shifts(int token,
         const short int* conflicts;
         yygetLRActions(current_stack->state, token, &action, &conflicts);
 
-        // only real reductions at this point
+        // Only real shifts at this point
         YYASSERT(yyisShiftAction(action));
 
         int dest_state = action;
@@ -2353,6 +2354,7 @@ b4_dollar_popdef])[]dnl
             report_syntax_error(yytoken]b4_user_args[);
             break;
         }
+
         YYDPRINTF((stderr, "**************************************************************\n"));
         YYDPRINTF((stderr, "**************************************************************\n"));
     }
@@ -2367,9 +2369,9 @@ b4_dollar_popdef])[]dnl
     if (gss.num_active_stacks == 1
             && gss.stacks[0]->state == YYFINAL)
     {
-        fprintf(stderr, "Parse ok\n");
         if (gss.stacks[0]->preds != NULL)
             evaluate_payload(gss.stacks[0]->preds[0]->payload]b4_user_args[);
+        fprintf(stderr, "Parse OK\n");
         yyresult = 0;
     }
     else
