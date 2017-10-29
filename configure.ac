@@ -296,7 +296,7 @@ fi
 dnl -- End New Fortran scanner --
 
 dnl -- New GLR parsing algorithm ---
-new_glr_algorithm="no"
+new_glr_algorithm="yes"
 AC_MSG_CHECKING([if new GLR algorithm has been enabled])
 AC_ARG_ENABLE([new-glr-algorithm],
     AS_HELP_STRING([--enable-new-glr-algorithm], [Enables a new GLR algorith. THIS IS EXPERIMENTAL]),
