@@ -4891,6 +4891,9 @@ nested_name_specifier_0 : class_or_namespace_name
     $$ = $1;
 }
 | decltype_specifier
+{
+    $$ = $1;
+}
 ;
 
 nested_name_specifier_1 : nested_name_specifier_0
