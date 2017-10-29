@@ -843,92 +843,6 @@ yyisErrorAction (int yyaction)
 | yyparse.  |
 `----------*/
 
-#define CUSTOM_POOL(pool_name, data_type, pool_size) \
-typedef union pool_name##_pool_item_tag pool_name##_pool_item_t; \
-\
-union pool_name##_pool_item_tag \
-{ \
-    data_type data; \
-    int next; \
-}; \
- \
-typedef struct pool_name##_pool_tag pool_name##_pool_t; \
- \
-struct pool_name##_pool_tag \
-{ \
-    int head; \
-    int num_free_items; \
-    int num_initialized; \
- \
-    pool_name##_pool_item_t chunk[pool_size]; \
-}; \
- \
-static pool_name##_pool_t pool_name##_pool; \
- \
-static inline void pool_name##_pool_init(void) \
-{ \
-    pool_name##_pool.head = 0; \
-    pool_name##_pool.num_free_items = pool_size; \
-    pool_name##_pool.num_initialized = 0; \
-} \
- \
-static inline data_type* pool_name##_pool_allocate(void) \
-{ \
-    if (pool_name##_pool.num_free_items == 0) \
-        return NULL; \
- \
-    if (pool_name##_pool.num_initialized < pool_size) \
-    { \
-        pool_name##_pool.chunk[pool_name##_pool.num_initialized].next \
-            = pool_name##_pool.num_initialized + 1; \
-        pool_name##_pool.num_initialized++; \
-    } \
- \
-    data_type* res = &(pool_name##_pool.chunk[pool_name##_pool.head].data); \
- \
-    pool_name##_pool.num_free_items--; \
-    if (pool_name##_pool.num_free_items > 0) \
-    { \
-        pool_name##_pool.head = pool_name##_pool.chunk[pool_name##_pool.head].next; \
-    } \
-    else \
-    { \
-        pool_name##_pool.head = -1; \
-    } \
- \
-    return res; \
-} \
- \
-static inline void pool_name##_pool_deallocate(data_type* p) \
-{ \
-    /* strict aliasing issues here? */ \
-    pool_name##_pool_item_t* q = (pool_name##_pool_item_t*)p; \
-    if (pool_name##_pool.head != -1) \
-    { \
-        q->next = pool_name##_pool.head; \
-    } \
-    else \
-    { \
-        q->next = pool_size; \
-    } \
- \
-    pool_name##_pool.head = q - pool_name##_pool.chunk; \
-    pool_name##_pool.num_free_items++; \
-}
-
-
-enum {
-    // Pool sizes
-    STACK_POOL_SIZE = 128,
-    STACK_NODE_EDGE_POOL_SIZE = 128,
-    PAYLOAD_POOL_SIZE = 2048,
-
-    // Immediate elements represented in data structures
-    MAX_PAYLOAD_VALUES_IMEDIATES = 4,
-    MAX_EDGES_PATH_IMEDIATES = 16,
-    MAX_STACK_NODE_EDGES_IMMEDIATES = 2,
-};
-
 // A stack node represents a node of the GSS
 struct stack_node_tag;
 typedef struct stack_node_tag stack_node_t;
@@ -984,7 +898,6 @@ struct stack_node_tag
     // predecessors in the GSS
     int num_preds;
     stack_node_edge_t **preds;
-    stack_node_edge_t *preds_a[MAX_STACK_NODE_EDGES_IMMEDIATES];
 };
 
 
@@ -1022,7 +935,6 @@ struct payload_reduce_tag
     ]b4_locations_if([YYLTYPE yyloc;])[
     int num_values;
     payload_t **values;
-    payload_t *values_a[MAX_PAYLOAD_VALUES_IMEDIATES];
 };
 
 // The payload of an edge
@@ -1060,79 +972,17 @@ static void walk_payload_t(void *p, void (*callback)(void*))
 static void destroy_payload_t(void *p)
 {
     payload_t* payload = (payload_t*)p;
-    if ((payload->kind == P_DEFERRED_REDUCE
+    if (payload->kind == P_DEFERRED_REDUCE
             || payload->kind == P_DEFINITIVE_REDUCE)
-            && (payload->r.num_values >= MAX_PAYLOAD_VALUES_IMEDIATES))
     {
         YYFREE(payload->r.values);
     }
     YYFREE(payload);
 }
 
-static void empty_payload_t(payload_t* p)
-{
-    switch (p->kind)
-    {
-        case P_DEFERRED_SHIFT:
-        case P_DEFINITIVE_SHIFT:
-            {
-                // Nothing to do
-                break;
-            }
-        case P_DEFERRED_REDUCE:
-        case P_DEFINITIVE_REDUCE:
-            {
-                int i;
-                for (i = 0; i < p->r.num_values; i++)
-                {
-                    decref(p->r.values[i]);
-                }
-                if (p->r.num_values >= MAX_PAYLOAD_VALUES_IMEDIATES)
-                {
-                    YYFREE(p->r.values);
-                }
-                break;
-            }
-        default:
-            YYASSERT(false);
-    }
-}
-
-CUSTOM_POOL(payload, payload_t, PAYLOAD_POOL_SIZE);
-
-static void destroy_payload_t_in_pool(void *p)
-{
-    payload_t* payload = (payload_t*)p;
-    if ((payload->kind == P_DEFERRED_REDUCE
-            || payload->kind == P_DEFINITIVE_REDUCE)
-            && (payload->r.num_values >= MAX_PAYLOAD_VALUES_IMEDIATES))
-    {
-        YYFREE(payload->r.values);
-    }
-    payload_pool_deallocate(payload);
-}
-
-static inline char payload_pool_contains(payload_t* p)
-{
-    payload_pool_item_t* q = (payload_pool_item_t*)p;
-    return (payload_pool.chunk <= q)
-           && (q < (payload_pool.chunk + PAYLOAD_POOL_SIZE));
-}
-
 static inline payload_t* new_payload(payload_kind_t kind)
 {
-    payload_t *payload = payload_pool_allocate();
-    if (payload == NULL)
-    {
-        payload = newrefcounted(payload_t);
-    }
-    else
-    {
-        payload->_ref.refs = 1;
-        payload->_ref.walk = walk_payload_t;
-        payload->_ref.destroy = destroy_payload_t_in_pool;
-    }
-
+    payload_t *payload = newrefcounted(payload_t);
     payload->kind = kind;
     payload->next = NULL;
     return payload;
@@ -1171,19 +1021,10 @@ struct stack_node_set_tag
 
 static stack_node_set_t gss;
 
-static inline void stack_pool_init(void);
-static inline void stack_node_edge_pool_init(void);
-static inline void payload_pool_init(void);
-
 static inline void gss_init(void)
 {
     gss.num_active_stacks = 0;
     gss.stacks = NULL;
-
-    // Init pools
-    stack_pool_init();
-    stack_node_edge_pool_init();
-    payload_pool_init();
 }
 
 static inline void gss_add_stack(stack_node_t* stack)
@@ -1210,7 +1051,6 @@ struct path_tag
 {
     int length;
     stack_node_edge_t **edges;
-    stack_node_edge_t *edges_a[MAX_EDGES_PATH_IMEDIATES];
 } path_t;
 
 
@@ -1224,10 +1064,8 @@ struct queue_item_tag
 
 static void destroy_queue_item_t(queue_item_t* q)
 {
-    if (q->path.length >= MAX_EDGES_PATH_IMEDIATES)
-    {
-        YYFREE(q->path.edges);
-    }
+    YYFREE(q->path.edges);
+    YYFREE(q);
 }
 
 typedef struct path_queue_tag
@@ -1235,7 +1073,7 @@ typedef struct path_queue_tag
     int capacity;
     int start;
     int end;
-    queue_item_t* items;
+    queue_item_t** items;
 } path_queue_t;
 
 static path_queue_t path_queue;
@@ -1253,38 +1091,24 @@ static inline bool path_queue_is_empty(void)
     return path_queue.start == path_queue.end;
 }
 
-static inline queue_item_t* path_queue_add(void)
+static inline void path_queue_add(queue_item_t* qi)
 {
     if (path_queue.end >= path_queue.capacity)
     {
-        int previous_capacity = path_queue.capacity;
         path_queue.capacity = 2*(path_queue.capacity + 1);
         path_queue.items = YYREALLOC(path_queue.items,
                 path_queue.capacity
                 * sizeof(*path_queue.items));
-
-        // Fix interior pointers
-        int i;
-        for (i = 0; i < previous_capacity; i++)
-        {
-            if (path_queue.items[i].path.length < MAX_EDGES_PATH_IMEDIATES)
-            {
-                path_queue.items[i].path.edges =
-                    path_queue.items[i].path.edges_a;
-            }
-        }
     }
 
-    queue_item_t* result = &path_queue.items[path_queue.end];
+    path_queue.items[path_queue.end] = qi;
     path_queue.end++;
-
-    return result;
 }
 
-static inline int path_queue_dequeue(void)
+static inline queue_item_t* path_queue_dequeue(void)
 {
     YYASSERT(path_queue.start < path_queue.end);
-    int result = path_queue.start;
+    queue_item_t* qi = path_queue.items[path_queue.start];
 
     path_queue.start++;
 
@@ -1295,15 +1119,15 @@ static inline int path_queue_dequeue(void)
         path_queue.end = 0;
     }
 
-    return result;
+    return qi;
 }
 
 static inline void path_queue_destroy(void)
 {
     while (!path_queue_is_empty())
     {
-        int qid = path_queue_dequeue();
-        destroy_queue_item_t(&path_queue.items[qid]);
+        queue_item_t* q = path_queue_dequeue();
+        destroy_queue_item_t(q);
     }
     YYFREE(path_queue.items);
 }
@@ -1349,7 +1173,7 @@ static inline void compute_paths_rec(
                 return;
         }
         // create the queue item
-        queue_item_t* qi = path_queue_add();
+        queue_item_t* qi = YYMALLOC(sizeof(*qi));
         qi->stack = stack;
         qi->rule = rule;
 
@@ -1364,14 +1188,7 @@ static inline void compute_paths_rec(
         }
 
         qi->path.length = count;
-        if (qi->path.length < MAX_EDGES_PATH_IMEDIATES)
-        {
-            qi->path.edges = qi->path.edges_a;
-        }
-        else
-        {
-            qi->path.edges = YYMALLOC(qi->path.length * sizeof(*qi->path.edges));
-        }
+        qi->path.edges = YYMALLOC(qi->path.length * sizeof(*qi->path.edges));
 
         // copy the path
         stack_node_edge_t** qi_s = qi->path.edges;
@@ -1380,6 +1197,8 @@ static inline void compute_paths_rec(
         {
             *qi_s = it->edge;
         }
+
+        path_queue_add(qi);
     }
     else
     {
@@ -1414,11 +1233,13 @@ static inline void compute_paths(stack_node_t* current_stack, int rule, int leng
     else
     {
         // Add a degenerate path
-        queue_item_t* qi = path_queue_add();
+        queue_item_t* qi = YYMALLOC(sizeof(*qi));
         qi->stack = current_stack;
         qi->rule = rule;
         qi->path.length = 0;
         qi->path.edges = NULL;
+
+        path_queue_add(qi);
     }
 }
 
@@ -1802,13 +1623,6 @@ static void destroy_stack_node_edge_t(void *p)
     YYFREE(p);
 }
 
-CUSTOM_POOL(stack_node_edge, stack_node_edge_t, STACK_NODE_EDGE_POOL_SIZE);
-
-static void destroy_stack_node_edge_t_in_pool(void *p)
-{
-    stack_node_edge_pool_deallocate(p);
-}
-
 static inline stack_node_edge_t* stack_node_add_link(stack_node_t* target,
         stack_node_t* source,
         payload_t *payload)
@@ -1816,39 +1630,11 @@ static inline stack_node_edge_t* stack_node_add_link(stack_node_t* target,
     YYASSERT(target != NULL);
     YYASSERT(source != NULL);
 
-    if (source->num_preds == 0)
-        source->preds = source->preds_a;
-
     source->num_preds++;
+    source->preds = YYREALLOC(source->preds, source->num_preds * sizeof(*source->preds));
+    // FIXME: check if memory has been exhausted
 
-    if (source->num_preds > MAX_STACK_NODE_EDGES_IMMEDIATES)
-    {
-        if (source->num_preds == (MAX_STACK_NODE_EDGES_IMMEDIATES + 1))
-        {
-            source->preds
-                = YYMALLOC(source->num_preds * sizeof(*source->preds));
-            memcpy(source->preds,
-                   source->preds_a,
-                   sizeof(*source->preds) * MAX_STACK_NODE_EDGES_IMMEDIATES);
-        }
-        else
-        {
-            source->preds = YYREALLOC(
-                source->preds, source->num_preds * sizeof(*source->preds));
-        }
-    }
-
-    stack_node_edge_t *new_edge = stack_node_edge_pool_allocate();
-    if (new_edge == NULL)
-    {
-        new_edge = newrefcounted(stack_node_edge_t);
-    }
-    else
-    {
-        new_edge->_ref.refs = 1;
-        new_edge->_ref.walk = walk_stack_node_edge_t;
-        new_edge->_ref.destroy = destroy_stack_node_edge_t_in_pool;
-    }
+    stack_node_edge_t* new_edge = newrefcounted(stack_node_edge_t);
     new_edge->target = incref(target);
     new_edge->payload = payload;
 
@@ -1875,39 +1661,13 @@ static void walk_stack_node_t(void *p, void (*callback)(void*))
 static void destroy_stack_node_t(void *p)
 {
     stack_node_t* stack = (stack_node_t*)p;
-    if (stack->num_preds > MAX_STACK_NODE_EDGES_IMMEDIATES)
-        YYFREE(stack->preds);
+    YYFREE(stack->preds);
     YYFREE(stack);
-}
-
-/* Stack pool */
-
-CUSTOM_POOL(stack, stack_node_t, STACK_POOL_SIZE)
-
-/* End of stack pool */
-
-static void destroy_stack_node_t_in_pool(void *p)
-{
-    stack_node_t* stack = (stack_node_t*)p;
-    if (stack->num_preds > MAX_STACK_NODE_EDGES_IMMEDIATES)
-        YYFREE(stack->preds);
-    stack_pool_deallocate(stack);
 }
 
 static inline stack_node_t* new_stack(yyStateNum state)
 {
-    stack_node_t* stack = stack_pool_allocate();
-    if (stack == NULL)
-    {
-        // The pool is full, use the free storage
-        stack = newrefcounted(stack_node_t);
-    }
-    else
-    {
-        stack->_ref.refs = 1;
-        stack->_ref.walk = walk_stack_node_t;
-        stack->_ref.destroy = destroy_stack_node_t_in_pool;
-    }
+    stack_node_t* stack = newrefcounted(stack_node_t);
     stack->state = state;
     stack->num_preds = 0;
     stack->preds = NULL;
@@ -1950,14 +1710,7 @@ static inline void reduce_via_path(queue_item_t* qi, int token)
     payload_t *payload = new_payload(P_DEFERRED_REDUCE);
     payload->r.rule = qi->rule;
     payload->r.num_values = qi->path.length;
-    if (payload->r.num_values < MAX_PAYLOAD_VALUES_IMEDIATES)
-    {
-        payload->r.values = payload->r.values_a;
-    }
-    else
-    {
-        payload->r.values = YYMALLOC(qi->path.length * sizeof(*(payload->r.values)));
-    }
+    payload->r.values = YYMALLOC(qi->path.length * sizeof(*(payload->r.values)));
 
     int i;
     for (i = 0; i < qi->path.length; i++)
@@ -2039,13 +1792,10 @@ static inline void reduce_via_path(queue_item_t* qi, int token)
 // property elsewhere
 static inline char gss_stack_is_linear_(stack_node_t* stack)
 {
-    while (stack != NULL
-            && stack->num_preds == 1)
-    {
-        stack = stack->preds[0]->target;
-    }
-
-    return stack == NULL || stack->num_preds == 0;
+    return stack == NULL
+        || stack->num_preds == 0
+        || (stack->num_preds == 1
+                && gss_stack_is_linear_(stack->preds[0]->target));
 }
 
 static inline void do_reductions(int token)
@@ -2074,11 +1824,11 @@ static inline void do_reductions(int token)
 
         while (!path_queue_is_empty())
         {
-            int qid = path_queue_dequeue();
+            queue_item_t* qi = path_queue_dequeue();
 
-            reduce_via_path(&path_queue.items[qid], token);
+            reduce_via_path(qi, token);
 
-            destroy_queue_item_t(&path_queue.items[qid]);
+            destroy_queue_item_t(qi);
         }
 
         YYASSERT(path_queue_is_empty());
@@ -2286,10 +2036,6 @@ static inline void evaluate_single_payload(payload_t* d]b4_user_formals[)
                 {
                     decref(d->r.values[i]);
                     d->r.values[i] = NULL;
-                }
-                if (d->r.num_values >= MAX_PAYLOAD_VALUES_IMEDIATES)
-                {
-                    YYFREE(d->r.values);
                 }
                 d->r.num_values = 0;
 
@@ -2499,58 +2245,39 @@ static inline void evaluate_payload(payload_t* p]b4_user_formals[)
             evaluate_single_payload(pd_best]b4_user_args[);
         }
 
-        if (p == pd_best)
-        {
-            // Easy case
-            decref(p->next);
-            p->next = NULL;
-        }
-        else
-        {
-            // Carefully split the list
-            payload_t* split_point = p;
-            while (split_point->next != pd_best)
-            {
-                split_point = split_point->next;
-            }
-
-            decref(pd_best->next);
-            pd_best->next = NULL;
-
-            split_point->next = NULL;
-            decref(p->next);
-
-            empty_payload_t(p);
-            *p = *pd_best;
-            if (p->kind == P_DEFERRED_REDUCE)
-            {
-                // Fix the interior pointer
-                if (0 < p->r.num_values
-                        && p->r.num_values < MAX_PAYLOAD_VALUES_IMEDIATES)
-                {
-                    p->r.values = p->r.values_a;
-                }
-            }
-
-            // FIXME: This is definitely not nice
-            if (pd_best->_ref.refs == 1)
-            {
-                if (payload_pool_contains(pd_best))
-                {
-                    payload_pool_deallocate(pd_best);
-                }
-                else
-                {
-                    YYFREE(pd_best);
-                }
-            }
-        }
+        decref(pd_best->next);
+        pd_best->next = NULL;
+        incref(pd_best);
+        decref(p);
+        *p = *pd_best;
     }
     else
     {
         evaluate_single_payload(p]b4_user_args[);
     }
 }
+
+#if 0
+static inline void process_deferred_actions(int dummy]b4_user_formals[)
+{
+    YYUSE(dummy);
+    YYDPRINTF((stderr, "Processing deferred actions\n"));
+    stack_node_t* current = gss.stacks[0];
+
+    for (;;)
+    {
+        YYDPRINTF((stderr, "Current state being processed is state s%d [%p]\n", current->state, current));
+        if (current->preds == NULL)
+            break;
+
+        payload_t* p = current->preds[0]->payload;
+        evaluate_payload(p]b4_user_args[);
+        current = current->preds[0]->target;
+    }
+
+    YYDPRINTF((stderr, "Done processing deferred actions\n"));
+}
+#endif
 
 static inline void report_syntax_error(int token]b4_user_formals[)
 {
