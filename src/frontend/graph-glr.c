@@ -843,6 +843,79 @@ yyisErrorAction (int yyaction)
 | yyparse.  |
 `----------*/
 
+
+// Mini pool implementation
+
+#define DEFINE_POOL(TYPENAME) \
+\
+typedef union minipool_##TYPENAME##_item_tag { \
+  union minipool_##TYPENAME##_item_tag *next; \
+  TYPENAME datum; \
+} minipool_##TYPENAME##_item_t; \
+\
+typedef struct minipool_##TYPENAME##_arena_tag { \
+  minipool_##TYPENAME##_item_t *storage; \
+  struct minipool_##TYPENAME##_arena_tag *next; \
+} minipool_##TYPENAME##_arena_t; \
+\
+typedef struct minipool_##TYPENAME##_tag { \
+  minipool_##TYPENAME##_arena_t *arena; \
+  int arena_size; \
+  minipool_##TYPENAME##_item_t *free; \
+} minipool_##TYPENAME##_t; \
+\
+static minipool_##TYPENAME##_arena_t *minipool_##TYPENAME##_arena_new(int arena_size) { \
+  minipool_##TYPENAME##_arena_t *arena = malloc(sizeof(*arena)); \
+  arena->next = NULL; \
+  arena->storage = malloc(sizeof(*arena->storage) * arena_size); \
+ \
+  for (int i = 1; i < arena_size; i++) { \
+    arena->storage[i - 1].next = &arena->storage[i]; \
+  } \
+  arena->storage[arena_size - 1].next = NULL; \
+ \
+  return arena; \
+} \
+\
+void minipool_##TYPENAME##_init(minipool_##TYPENAME##_t *mp, int arena_size) { \
+  mp->arena_size = arena_size; \
+  mp->arena = minipool_##TYPENAME##_arena_new(arena_size); \
+ \
+  mp->free = mp->arena->storage; \
+} \
+\
+TYPENAME *minipool_##TYPENAME##_alloc(minipool_##TYPENAME##_t *mp) { \
+  if (mp->free == NULL) { \
+    minipool_##TYPENAME##_arena_t *arena = minipool_##TYPENAME##_arena_new(mp->arena_size); \
+    arena->next = mp->arena; \
+    mp->arena = arena; \
+    mp->free = mp->arena->storage; \
+  } \
+ \
+  minipool_##TYPENAME##_item_t *current = mp->free; \
+  mp->free = current->next; \
+ \
+  return &current->datum; \
+} \
+\
+void minipool_##TYPENAME##_free(minipool_##TYPENAME##_t *mp, TYPENAME *d) { \
+  minipool_##TYPENAME##_item_t *current = \
+      (minipool_##TYPENAME##_item_t *)((char *)d - offsetof(minipool_##TYPENAME##_item_t, datum)); \
+ \
+  current->next = mp->free; \
+  mp->free = current; \
+} \
+\
+void minipool_##TYPENAME##_destroy(minipool_##TYPENAME##_t *mp) { \
+  minipool_##TYPENAME##_arena_t *arena = mp->arena; \
+  do { \
+    minipool_##TYPENAME##_arena_t *arena_to_free = arena; \
+    arena = arena->next; \
+    free(arena_to_free->storage); \
+    free(arena_to_free); \
+  } while (arena != NULL); \
+}
+
 // A stack node represents a node of the GSS
 struct stack_node_tag;
 typedef struct stack_node_tag stack_node_t;
@@ -888,7 +961,8 @@ static inline void decref_(void *p)
 // #define assignref(p, q) ({ __typeof__(p) _p = p; decref(_p); __typeof__(q) _q = q; if (_q != NULL) incref(_q); _p = _q; })
 
 #define newrefcounted(type) ({ \
-        type *_t = YYMALLOC(sizeof(type)); \
+        /* type *_t = YYMALLOC(sizeof(type)); */ \
+        type *_t = minipool_##type##_alloc(&mp_##type); \
         _t->_ref.refs = 1; \
         _t->_ref.walk = walk_##type; \
         _t->_ref.destroy = destroy_##type; \
@@ -909,6 +983,9 @@ struct stack_node_tag
     stack_node_edge_t **preds;
 };
 
+DEFINE_POOL(stack_node_t);
+minipool_stack_node_t_t mp_stack_node_t;
+
 // A stack node edge refers to another stack node and has a payload
 struct stack_node_edge_tag
 {
@@ -917,6 +994,9 @@ struct stack_node_edge_tag
 
     payload_t *payload;
 };
+
+DEFINE_POOL(stack_node_edge_t);
+minipool_stack_node_edge_t_t mp_stack_node_edge_t;
 
 struct stack_node_set_tag
 {
@@ -970,6 +1050,9 @@ struct payload_tag
     };
 };
 
+DEFINE_POOL(payload_t);
+minipool_payload_t_t mp_payload_t;
+
 static void walk_payload_t(void *p, void (*callback)(void*))
 {
     if (p == NULL)
@@ -998,7 +1081,7 @@ static void destroy_payload_t(void *p)
     {
         YYFREE(payload->r.values);
     }
-    YYFREE(payload);
+    minipool_payload_t_free(&mp_payload_t, payload);
 }
 
 static inline payload_t* new_payload(payload_kind_t kind)
@@ -1064,10 +1147,14 @@ struct queue_item_tag
     int rule;
 };
 
+
+DEFINE_POOL(queue_item_t);
+minipool_queue_item_t_t mp_queue_item_t;
+
 static void destroy_queue_item_t(queue_item_t* q)
 {
     YYFREE(q->path.edges);
-    YYFREE(q);
+    minipool_queue_item_t_free(&mp_queue_item_t, q);
 }
 
 typedef struct path_queue_tag
@@ -1175,7 +1262,7 @@ static inline void compute_paths_rec(
                 return;
         }
         // create the queue item
-        queue_item_t* qi = YYMALLOC(sizeof(*qi));
+        queue_item_t* qi = minipool_queue_item_t_alloc(&mp_queue_item_t);
         qi->stack = stack;
         qi->rule = rule;
 
@@ -1234,7 +1321,7 @@ static inline void compute_paths(stack_node_t* current_stack, int rule, int leng
     else
     {
         // Add a degenerate path
-        queue_item_t* qi = YYMALLOC(sizeof(*qi));
+        queue_item_t* qi = minipool_queue_item_t_alloc(&mp_queue_item_t);
         qi->stack = current_stack;
         qi->rule = rule;
         qi->path.length = 0;
@@ -1621,7 +1708,7 @@ static void walk_stack_node_edge_t(void *p, void (*callback)(void *p))
 
 static void destroy_stack_node_edge_t(void *p)
 {
-    YYFREE(p);
+    minipool_stack_node_edge_t_free(&mp_stack_node_edge_t, (stack_node_edge_t*)p);
 }
 
 static inline stack_node_edge_t* stack_node_add_link(stack_node_t* target,
@@ -1663,7 +1750,7 @@ static void destroy_stack_node_t(void *p)
 {
     stack_node_t* stack = (stack_node_t*)p;
     YYFREE(stack->preds);
-    YYFREE(stack);
+    minipool_stack_node_t_free(&mp_stack_node_t, stack);
 }
 
 static inline stack_node_t* new_stack(yyStateNum state)
@@ -1793,10 +1880,15 @@ static inline void reduce_via_path(queue_item_t* qi, int token)
 // property elsewhere
 static inline char gss_stack_is_linear_(stack_node_t* stack)
 {
-    return stack == NULL
-        || stack->num_preds == 0
-        || (stack->num_preds == 1
-                && gss_stack_is_linear_(stack->preds[0]->target));
+    while (stack != NULL)
+    {
+        if (stack->num_preds == 0)
+            return true;
+        if (stack->num_preds != 1)
+            return false;
+        stack = stack->preds[0]->target;
+    }
+    return true;
 }
 
 static inline void do_reductions(int token)
@@ -2280,6 +2372,22 @@ static inline void process_deferred_actions(int dummy]b4_user_formals[)
 }
 #endif
 
+static void init_pools(void)
+{
+    minipool_stack_node_t_init(&mp_stack_node_t, 1024);
+    minipool_stack_node_edge_t_init(&mp_stack_node_edge_t, 1024);
+    minipool_payload_t_init(&mp_payload_t, 512);
+    minipool_queue_item_t_init(&mp_queue_item_t, 64);
+}
+
+static void destroy_pools(void)
+{
+    minipool_stack_node_t_destroy(&mp_stack_node_t);
+    minipool_stack_node_edge_t_destroy(&mp_stack_node_edge_t);
+    minipool_payload_t_destroy(&mp_payload_t);
+    minipool_queue_item_t_destroy(&mp_queue_item_t);
+}
+
 static inline void report_syntax_error(int token]b4_user_formals[)
 {
     const char *token_desc = yytokenName(token);
@@ -2303,6 +2411,8 @@ static inline void report_syntax_error(int token]b4_user_formals[)
 {
     // Initialize GSS
     gss_init();
+
+    init_pools();
 
     path_queue_init();
     stack_node_t* initial_stack = new_stack(0);
@@ -2382,6 +2492,9 @@ b4_dollar_popdef])[]dnl
 
     path_queue_destroy();
     gss_destroy();
+
+    // Destroy pools
+    destroy_pools();
 
     return yyresult;
 
