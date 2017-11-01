@@ -1000,10 +1000,12 @@ minipool_stack_node_edge_t_t mp_stack_node_edge_t;
 
 struct stack_node_set_tag
 {
-    int num_active_stacks;
-    stack_node_t **stacks;
+    stack_node_t *stack;
+    stack_node_set_t *next;
 };
 
+DEFINE_POOL(stack_node_set_t);
+minipool_stack_node_set_t_t mp_stack_node_set_t;
 
 // Two kinds of payloads for edges: those that immediately encode the
 // semantic value and those that defer the semantic value and only encode
@@ -1104,30 +1106,33 @@ static inline char payload_is_shift(payload_t* p)
         || p->kind == P_DEFINITIVE_SHIFT;
 }
 
-static stack_node_set_t gss;
+static stack_node_set_t *gss;
 
 static inline void gss_init(void)
 {
-    gss.num_active_stacks = 0;
-    gss.stacks = NULL;
+    gss = NULL;
 }
 
 static inline void gss_add_stack(stack_node_t* stack)
 {
-    gss.num_active_stacks++;
-    gss.stacks = YYREALLOC(gss.stacks, gss.num_active_stacks * sizeof(*gss.stacks));
-    // FIXME: check if memory has been exhausted
-    gss.stacks[gss.num_active_stacks - 1] = stack;
+    stack_node_set_t *new_item = minipool_stack_node_set_t_alloc(&mp_stack_node_set_t);
+    new_item->stack = stack;
+    new_item->next = gss;
+
+    gss = new_item;
 }
 
 static inline void gss_destroy(void)
 {
-    int i;
-    for (i = 0; i < gss.num_active_stacks; i++)
+    stack_node_set_t *it = gss;
+    while (it != NULL)
     {
-        decref(gss.stacks[i]);
+        decref(it->stack);
+        stack_node_set_t *current = it;
+        it = it->next;
+        minipool_stack_node_set_t_free(&mp_stack_node_set_t, current);
     }
-    YYFREE(gss.stacks);
+    gss = NULL;
 }
 
 // A path, computed when performing reductions
@@ -1434,12 +1439,14 @@ user_action (yyRuleNum yyn,
 // FIXME: can we do this faster?
 static inline stack_node_t* gss_find_stack_node(int dest_state)
 {
-    int i;
-    for (i = 0; i < gss.num_active_stacks; i++)
+    stack_node_set_t *it = gss;
+    while (it != NULL)
     {
-        stack_node_t* stack = gss.stacks[i];
+        stack_node_t* stack = it->stack;
         if (stack->state == dest_state)
             return stack;
+
+        it = it->next;
     }
     return NULL;
 }
@@ -1545,27 +1552,42 @@ static inline void print_stacks(void)
     if (!yydebug)
         return;
 
-    YYDPRINTF((stderr, "There are %d active stacks\n", gss.num_active_stacks));
-
-    int i;
-    for (i = 0; i < gss.num_active_stacks; i++)
+    stack_node_set_t *it = gss;
+    int num_active_stacks = 0;
+    while (it != NULL)
     {
-        stack_node_t* current_stack = gss.stacks[i];
+        num_active_stacks++;
+        it = it->next;
+    }
+
+
+    YYDPRINTF((stderr, "There are %d active stacks\n", num_active_stacks));
+
+    it = gss;
+    int i = 0;
+    while (it != NULL)
+    {
+        stack_node_t* current_stack = it->stack;
         fprintf(stderr, "Stack #%d: ", i);
         print_stack_rec(current_stack);
         fprintf(stderr, "\n");
+        i++;
+        it = it->next;
     }
 
 }
 
 static inline int stack_id(stack_node_t* stack)
 {
-    int i;
-    for (i = 0; i < gss.num_active_stacks; i++)
+    stack_node_set_t *it = gss;
+    int i = 0;
+    while (it != NULL)
     {
-        stack_node_t* current_stack = gss.stacks[i];
+        stack_node_t* current_stack = it->stack;
         if (current_stack == stack)
             return i;
+        i++;
+        it = it->next;
     }
     return -1;
 }
@@ -1645,10 +1667,10 @@ static inline void enqueue_limited_reductions(stack_node_edge_t* link, int token
     print_stacks();
 #endif
 
-    int i;
-    for (i = 0; i < gss.num_active_stacks; i++)
+    stack_node_set_t *it = gss;
+    while (it != NULL)
     {
-        stack_node_t* current_stack = gss.stacks[i];
+        stack_node_t* current_stack = it->stack;
 
         if (yyisDefaultedState(current_stack->state))
         {
@@ -1692,6 +1714,8 @@ static inline void enqueue_limited_reductions(stack_node_edge_t* link, int token
                 conflicts++;
             }
         }
+
+        it = it->next;
     }
 }
 
@@ -1900,17 +1924,20 @@ static inline void do_reductions(int token)
 
     YYASSERT(path_queue_is_empty());
 
-    int first_stack_reduced = 0;
+    // int first_stack_reduced = 0;
+    stack_node_set_t* final_it = NULL;
     for (;;)
     {
-        int initial_active_stacks = gss.num_active_stacks;
-        int i;
-        for (i = first_stack_reduced; i < initial_active_stacks; i++)
+        stack_node_set_t* initial_gss = gss;
+
+        stack_node_set_t *it = gss;
+        while (it != final_it)
         {
-            stack_node_t* current_stack = gss.stacks[i];
-            YYDPRINTF((stderr, "Reducing stack #%d [%p]. Currently in state %d\n", i, current_stack, current_stack->state));
+            stack_node_t* current_stack = it->stack;
+            YYDPRINTF((stderr, "Reducing stack [%p]. Currently in state %d\n", current_stack, current_stack->state));
 
             enqueue_reductions(current_stack, token);
+            it = it->next;
         }
 
         YYDPRINTF((stderr, "\n"));
@@ -1926,8 +1953,8 @@ static inline void do_reductions(int token)
 
         YYASSERT(path_queue_is_empty());
 
-        YYASSERT(initial_active_stacks <= gss.num_active_stacks);
-        if (initial_active_stacks == gss.num_active_stacks)
+        // No stack has been added by reduce_via_path
+        if (initial_gss == gss)
         {
             YYDPRINTF((stderr, "No more stacks to reduce\n\n"));
             break;
@@ -1935,8 +1962,19 @@ static inline void do_reductions(int token)
 
         YYDPRINTF((stderr, "\n"));
 
-        YYDPRINTF((stderr, "There are %d more stacks to potentially reduce\n", gss.num_active_stacks - initial_active_stacks));
-        first_stack_reduced = initial_active_stacks;
+#if ]b4_api_PREFIX[DEBUG
+        {
+            int num_stacks = 0;
+            it = gss;
+            while (it != final_it)
+            {
+                num_stacks++;
+                it = it->next;
+            }
+            YYDPRINTF((stderr, "There are %d more stacks to potentially reduce\n", num_stacks));
+        }
+#endif
+        final_it = initial_gss;
     }
 }
 
@@ -1954,19 +1992,19 @@ static inline void do_shifts(int token,
     print_stacks();
 #endif
 
-    stack_node_set_t old_gss = gss;
+    stack_node_set_t *old_gss = gss;
 
     // clear gss
-    gss.num_active_stacks = 0;
-    gss.stacks = NULL;
+    gss = NULL;
 
-    int currently_active = old_gss.num_active_stacks;
+    int currently_active = 0;
     stack_node_t* last_alive = NULL;
 
-    int i;
-    for (i = 0; i < old_gss.num_active_stacks; i++)
+    stack_node_set_t *it = old_gss;
+    stack_node_set_t *prev = NULL;
+    while (it != NULL)
     {
-        stack_node_t* current_stack = old_gss.stacks[i];
+        stack_node_t* current_stack = it->stack;
 
         int action = 0;
         const short int* conflicts;
@@ -1976,13 +2014,28 @@ static inline void do_shifts(int token,
         {
             // we will process these in the next loop
             last_alive = current_stack;
+            currently_active++;
+
+            prev = it;
+            it = it->next;
         }
         else
         {
-            currently_active--;
-            old_gss.stacks[i] = NULL;
+            stack_node_set_t* current_it = it;
+            if (prev != NULL)
+            {
+                prev->next = it->next;
+            }
+            else
+            {
+                old_gss = it->next;
+            }
+            it = it->next;
+            // Free dead stack
             decref(current_stack);
-            YYDPRINTF((stderr, "Stack #%d s%d [%p] does not have to shift, so it dies\n", i, current_stack->state, current_stack));
+            // Free dead stack item
+            minipool_stack_node_set_t_free(&mp_stack_node_set_t, current_it);
+            YYDPRINTF((stderr, "Stack s%d [%p] does not have to shift, so it dies\n", current_stack->state, current_stack));
         }
     }
 
@@ -1993,13 +2046,10 @@ static inline void do_shifts(int token,
         evaluate_payload(last_alive->preds[0]->payload]b4_user_args[);
     }
 
-    for (i = 0; i < old_gss.num_active_stacks; i++)
+    it = old_gss;
+    while (it != NULL)
     {
-        stack_node_t* current_stack = old_gss.stacks[i];
-
-        // Already dead
-        if (current_stack == NULL)
-            continue;
+        stack_node_t* current_stack = it->stack;
 
         int action = 0;
         const short int* conflicts;
@@ -2009,7 +2059,7 @@ static inline void do_shifts(int token,
         YYASSERT(yyisShiftAction(action));
 
         int dest_state = action;
-        YYDPRINTF((stderr, "Shifting stack #%d [%p]. Currently in state s%d, New state is s%d\n", i, current_stack, current_stack->state, dest_state));
+        YYDPRINTF((stderr, "Shifting stack [%p]. Currently in state s%d, New state is s%d\n", current_stack, current_stack->state, dest_state));
 
         stack_node_t* right_sibling = gss_find_stack_node(dest_state);
         if (right_sibling == NULL)
@@ -2030,9 +2080,18 @@ static inline void do_shifts(int token,
         ]b4_locations_if([payload->s.yyloc = *yyloc;])[
         stack_node_add_link(current_stack, right_sibling, payload);
         decref(current_stack);
+
+        it = it->next;
     }
 
-    YYFREE(old_gss.stacks);
+    // Free old stack set
+    it = old_gss;
+    while (it != NULL)
+    {
+        stack_node_set_t* current_it = it;
+        it = it->next;
+        minipool_stack_node_set_t_free(&mp_stack_node_set_t, current_it);
+    }
 }
 
 static inline YYSTYPE get_yyval_of_payload(payload_t* p)
@@ -2376,6 +2435,7 @@ static void init_pools(void)
 {
     minipool_stack_node_t_init(&mp_stack_node_t, 1024);
     minipool_stack_node_edge_t_init(&mp_stack_node_edge_t, 1024);
+    minipool_stack_node_set_t_init(&mp_stack_node_set_t, 1024);
     minipool_payload_t_init(&mp_payload_t, 512);
     minipool_queue_item_t_init(&mp_queue_item_t, 64);
 }
@@ -2384,6 +2444,7 @@ static void destroy_pools(void)
 {
     minipool_stack_node_t_destroy(&mp_stack_node_t);
     minipool_stack_node_edge_t_destroy(&mp_stack_node_edge_t);
+    minipool_stack_node_set_t_destroy(&mp_stack_node_set_t);
     minipool_payload_t_destroy(&mp_payload_t);
     minipool_queue_item_t_destroy(&mp_queue_item_t);
 }
@@ -2431,10 +2492,10 @@ b4_dollar_popdef])[]dnl
     for (;;)
     {
         // Final state
-        if (gss.num_active_stacks == 1
-                && gss.stacks[0]->state == YYFINAL)
+        if (gss != NULL && gss->next == NULL
+                && gss->stack->state == YYFINAL)
         {
-            YYDPRINTF ((stderr, "Stack #0 [%p] in accepting state. Exiting\n", gss.stacks[0]));
+            YYDPRINTF ((stderr, "Stack #0 [%p] in accepting state. Exiting\n", gss->stack));
             break;
         }
 
@@ -2458,7 +2519,7 @@ b4_dollar_popdef])[]dnl
         do_shifts(yytoken, yyposn, &yylval]b4_locations_if([, &yylloc])[]b4_user_args[);
         yyposn++;
 
-        if (gss.num_active_stacks == 0)
+        if (gss == NULL)
         {
             YYDPRINTF((stderr, "No stack is alive, leaving\n"));
             report_syntax_error(yytoken]b4_user_args[);
@@ -2476,11 +2537,11 @@ b4_dollar_popdef])[]dnl
 
     int yyresult;
 
-    if (gss.num_active_stacks == 1
-            && gss.stacks[0]->state == YYFINAL)
+    if (gss != NULL && gss->next == NULL
+            && gss->stack->state == YYFINAL)
     {
-        if (gss.stacks[0]->preds != NULL)
-            evaluate_payload(gss.stacks[0]->preds[0]->payload]b4_user_args[);
+        if (gss->stack->preds != NULL)
+            evaluate_payload(gss->stack->preds[0]->payload]b4_user_args[);
         fprintf(stderr, "Parse OK\n");
         yyresult = 0;
     }
