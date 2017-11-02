@@ -972,15 +972,23 @@ static inline void decref_(void *p)
 // set of predecessors in the GSS. These
 // predecessors are accessible through
 // the edges of this node
+
+typedef
+struct stack_node_edge_set_tag
+{
+    stack_node_edge_t *edge;
+    struct stack_node_edge_set_tag *next;
+} stack_node_edge_set_t;
+
+DEFINE_POOL(stack_node_edge_set_t);
+minipool_stack_node_edge_set_t_t mp_stack_node_edge_set_t;
+
 struct stack_node_tag
 {
     /* private */ refcount_t _ref;
 
     yyStateNum state;
-
-    // predecessors in the GSS
-    int num_preds;
-    stack_node_edge_t **preds;
+    stack_node_edge_set_t *preds;
 };
 
 DEFINE_POOL(stack_node_t);
@@ -1030,6 +1038,12 @@ struct payload_shift_tag
 };
 
 // Deferred payload
+typedef struct payload_reduce_node_tag
+{
+    payload_t* payload;
+    struct payload_reduce_node_t* next;
+} payload_reduce_node_t;
+
 typedef struct payload_reduce_tag payload_reduce_t;
 struct payload_reduce_tag
 {
@@ -1162,56 +1176,68 @@ static void destroy_queue_item_t(queue_item_t* q)
     minipool_queue_item_t_free(&mp_queue_item_t, q);
 }
 
-typedef struct path_queue_tag
+typedef struct path_queue_tag path_queue_t;
+typedef struct path_queue_node_tag
 {
-    int capacity;
-    int start;
-    int end;
-    queue_item_t** items;
-} path_queue_t;
+    queue_item_t* item;
+    struct path_queue_node_tag* next;
+    struct path_queue_node_tag* prev;
+} path_queue_node_t;
+
+DEFINE_POOL(path_queue_node_t);
+minipool_path_queue_node_t_t mp_path_queue_node_t;
+
+struct path_queue_tag
+{
+    path_queue_node_t *tail;
+    path_queue_node_t *head;
+};
 
 static path_queue_t path_queue;
 
 static inline void path_queue_init(void)
 {
-    path_queue.capacity = 0;
-    path_queue.start = 0;
-    path_queue.end = 0;
-    path_queue.items = NULL;
+    path_queue.head = NULL;
+    path_queue.tail = NULL;
 }
 
 static inline bool path_queue_is_empty(void)
 {
-    return path_queue.start == path_queue.end;
+    return path_queue.tail == NULL;
 }
 
 static inline void path_queue_add(queue_item_t* qi)
 {
-    if (path_queue.end >= path_queue.capacity)
+    path_queue_node_t *pqn = minipool_path_queue_node_t_alloc(&mp_path_queue_node_t);
+    pqn->item = qi;
+    pqn->prev = NULL;
+
+    pqn->next = path_queue.tail;
+    if (path_queue.tail != NULL)
     {
-        path_queue.capacity = 2*(path_queue.capacity + 1);
-        path_queue.items = YYREALLOC(path_queue.items,
-                path_queue.capacity
-                * sizeof(*path_queue.items));
+        path_queue.tail->prev = pqn;
     }
 
-    path_queue.items[path_queue.end] = qi;
-    path_queue.end++;
+    path_queue.tail = pqn;
+
+    if (path_queue.head == NULL)
+    {
+        path_queue.head = pqn;
+    }
 }
 
 static inline queue_item_t* path_queue_dequeue(void)
 {
-    YYASSERT(path_queue.start < path_queue.end);
-    queue_item_t* qi = path_queue.items[path_queue.start];
+    path_queue_node_t *pqn = path_queue.head;
+    queue_item_t* qi = pqn->item;
 
-    path_queue.start++;
-
-    if (path_queue.start == path_queue.end)
+    path_queue.head = path_queue.head->prev;
+    if (path_queue.head == NULL)
     {
-        // Compact an empty queue
-        path_queue.start = 0;
-        path_queue.end = 0;
+        path_queue.tail = NULL;
     }
+
+    minipool_path_queue_node_t_free(&mp_path_queue_node_t, pqn);
 
     return qi;
 }
@@ -1223,7 +1249,6 @@ static inline void path_queue_destroy(void)
         queue_item_t* q = path_queue_dequeue();
         destroy_queue_item_t(q);
     }
-    YYFREE(path_queue.items);
 }
 
 typedef struct path_predecessor_tag path_predecessor_t;
@@ -1295,12 +1320,12 @@ static inline void compute_paths_rec(
     }
     else
     {
-        int num_preds = edge->target->num_preds;
-        int i;
-        for (i = 0; i < num_preds; i++)
+        stack_node_edge_set_t *edge_set = edge->target->preds;
+        while (edge_set != NULL)
         {
-            stack_node_edge_t* pred_edge = edge->target->preds[i];
+            stack_node_edge_t* pred_edge = edge_set->edge;
             compute_paths_rec(stack, pred_edge, rule, length - 1, &p, contains_link);
+            edge_set = edge_set->next;
         }
     }
 }
@@ -1315,12 +1340,12 @@ static inline void compute_paths(stack_node_t* current_stack, int rule, int leng
 
     if (length > 0)
     {
-        int num_preds = current_stack->num_preds;
-        int i;
-        for (i = 0; i < num_preds; i++)
+        stack_node_edge_set_t *edge_set = current_stack->preds;
+        while (edge_set != NULL)
         {
-            stack_node_edge_t* pred_edge = current_stack->preds[i];
+            stack_node_edge_t* pred_edge = edge_set->edge;
             compute_paths_rec(current_stack, pred_edge, rule, length - 1, NULL, /* contains_link */ NULL);
+            edge_set = edge_set->next;
         }
     }
     else
@@ -1349,12 +1374,12 @@ static inline void compute_paths_that_use_link(stack_node_t* current_stack,
     if (length == 0)
         return;
 
-    int num_preds = current_stack->num_preds;
-    int i;
-    for (i = 0; i < num_preds; i++)
+    stack_node_edge_set_t *edge_set = current_stack->preds;
+    while (edge_set != NULL)
     {
-        stack_node_edge_t* pred_edge = current_stack->preds[i];
+        stack_node_edge_t* pred_edge = edge_set->edge;
         compute_paths_rec(current_stack, pred_edge, rule, length - 1, NULL, contains_link);
+        edge_set = edge_set->next;
     }
 }
 
@@ -1514,6 +1539,7 @@ static inline void print_edge(stack_node_edge_t* edge)
 
 static inline void print_stack_rec(stack_node_t* stack)
 {
+#if 0
     fprintf(stderr, "s%d [%p]", stack->state, stack);
 
     switch (stack->num_preds)
@@ -1545,6 +1571,8 @@ static inline void print_stack_rec(stack_node_t* stack)
             }
             break;
     }
+#endif
+    YYASSERT(0 && "Not yet implemented");
 }
 
 static inline void print_stacks(void)
@@ -1742,16 +1770,15 @@ static inline stack_node_edge_t* stack_node_add_link(stack_node_t* target,
     YYASSERT(target != NULL);
     YYASSERT(source != NULL);
 
-    source->num_preds++;
-    source->preds = YYREALLOC(source->preds, source->num_preds * sizeof(*source->preds));
-    // FIXME: check if memory has been exhausted
-
     stack_node_edge_t* new_edge = newrefcounted(stack_node_edge_t);
     new_edge->target = incref(target);
     new_edge->payload = payload;
 
-    int idx = source->num_preds - 1;
-    source->preds[idx] = new_edge;
+    stack_node_edge_set_t* edge_set = minipool_stack_node_edge_set_t_alloc(&mp_stack_node_edge_set_t);
+    edge_set->next = source->preds;
+    edge_set->edge = new_edge;
+
+    source->preds = edge_set;
 
     return new_edge;
 }
@@ -1763,17 +1790,28 @@ static void walk_stack_node_t(void *p, void (*callback)(void*))
 
     stack_node_t* stack = (stack_node_t*)p;
 
-    int i;
-    for (i = 0; i < stack->num_preds; i++)
+    stack_node_edge_set_t* edge_set = stack->preds;
+    while (edge_set != NULL)
     {
-        callback(stack->preds[i]);
+        callback(edge_set->edge);
+        edge_set = edge_set->next;
     }
 }
 
 static void destroy_stack_node_t(void *p)
 {
     stack_node_t* stack = (stack_node_t*)p;
-    YYFREE(stack->preds);
+
+    stack_node_edge_set_t *edge_set = stack->preds;
+    while (edge_set != NULL)
+    {
+        stack_node_edge_set_t *current_edge_set = edge_set;
+        // FIXME!!
+        // decref(current_edge_set->edge);
+        edge_set = edge_set->next;
+        minipool_stack_node_edge_set_t_free(&mp_stack_node_edge_set_t, current_edge_set);
+    }
+
     minipool_stack_node_t_free(&mp_stack_node_t, stack);
 }
 
@@ -1781,7 +1819,6 @@ static inline stack_node_t* new_stack(yyStateNum state)
 {
     stack_node_t* stack = newrefcounted(stack_node_t);
     stack->state = state;
-    stack->num_preds = 0;
     stack->preds = NULL;
 
     YYDPRINTF((stderr, "New stack [%p]\n", stack));
@@ -1846,13 +1883,15 @@ static inline void reduce_via_path(queue_item_t* qi, int token)
         stack_node_edge_t* link = NULL;
 
         // look for a link from right_sibling to left_sibling
-        for (i = 0; i < right_sibling->num_preds; i++)
+        stack_node_edge_set_t* edge_set = right_sibling->preds;
+        while (edge_set != NULL)
         {
-            if (right_sibling->preds[i]->target == left_sibling)
+            if (edge_set->edge->target == left_sibling)
             {
-                link = right_sibling->preds[i];
+                link = edge_set->edge;
                 break;
             }
+            edge_set = edge_set->next;
         }
 
         if (link != NULL)
@@ -1906,11 +1945,11 @@ static inline char gss_stack_is_linear_(stack_node_t* stack)
 {
     while (stack != NULL)
     {
-        if (stack->num_preds == 0)
+        if (stack->preds == NULL)
             return true;
-        if (stack->num_preds != 1)
+        if (stack->preds->next != NULL)
             return false;
-        stack = stack->preds[0]->target;
+        stack = stack->preds->edge->target;
     }
     return true;
 }
@@ -2043,7 +2082,7 @@ static inline void do_shifts(int token,
         && gss_stack_is_linear_(last_alive)
         && last_alive->preds != NULL)
     {
-        evaluate_payload(last_alive->preds[0]->payload]b4_user_args[);
+        evaluate_payload(last_alive->preds->edge->payload]b4_user_args[);
     }
 
     it = old_gss;
@@ -2438,6 +2477,8 @@ static void init_pools(void)
     minipool_stack_node_set_t_init(&mp_stack_node_set_t, 1024);
     minipool_payload_t_init(&mp_payload_t, 512);
     minipool_queue_item_t_init(&mp_queue_item_t, 64);
+    minipool_path_queue_node_t_init(&mp_path_queue_node_t, 1024);
+    minipool_stack_node_edge_set_t_init(&mp_stack_node_edge_set_t, 1024);
 }
 
 static void destroy_pools(void)
@@ -2541,7 +2582,7 @@ b4_dollar_popdef])[]dnl
             && gss->stack->state == YYFINAL)
     {
         if (gss->stack->preds != NULL)
-            evaluate_payload(gss->stack->preds[0]->payload]b4_user_args[);
+            evaluate_payload(gss->stack->preds->edge->payload]b4_user_args[);
         fprintf(stderr, "Parse OK\n");
         yyresult = 0;
     }
