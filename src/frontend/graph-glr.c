@@ -1153,26 +1153,33 @@ static inline void gss_destroy(void)
 typedef
 struct path_tag
 {
-    int length;
-    stack_node_edge_t **edges;
+    stack_node_edge_t *edge;
+    struct path_tag *next;
 } path_t;
 
+DEFINE_POOL(path_t);
+minipool_path_t_t mp_path_t;
 
 typedef struct queue_item_tag queue_item_t;
 struct queue_item_tag
 {
     stack_node_t* stack;
-    path_t path;
+    path_t *path;
     int rule;
 };
-
 
 DEFINE_POOL(queue_item_t);
 minipool_queue_item_t_t mp_queue_item_t;
 
 static void destroy_queue_item_t(queue_item_t* q)
 {
-    YYFREE(q->path.edges);
+    path_t *path_it = q->path;
+    while (path_it != NULL)
+    {
+        path_t *current_path_it = path_it;
+        path_it = path_it->next;
+        minipool_path_t_free(&mp_path_t, current_path_it);
+    }
     minipool_queue_item_t_free(&mp_queue_item_t, q);
 }
 
@@ -1299,22 +1306,26 @@ static inline void compute_paths_rec(
         // assemble the path
         path_predecessor_t* it;
 
-        int count = 0;
-        // FIXME: count is just a constant offset of length
+        // copy the path
+        path_t* head = NULL;
+        path_t* tail = NULL;
         for (it = &p; it != NULL; it = it->pred)
         {
-            count++;
+            path_t *new_path = minipool_path_t_alloc(&mp_path_t);
+            new_path->edge = it->edge;
+            new_path->next = NULL;
+            if (head == NULL)
+            {
+                head = new_path;
+                tail = new_path;
+            }
+            else
+            {
+                tail->next = new_path;
+                tail = new_path;
+            }
         }
-
-        qi->path.length = count;
-        qi->path.edges = YYMALLOC(qi->path.length * sizeof(*qi->path.edges));
-
-        // copy the path
-        stack_node_edge_t** qi_s = qi->path.edges;
-        for (it = &p; it != NULL; it = it->pred, qi_s++)
-        {
-            *qi_s = it->edge;
-        }
+        qi->path = head;
 
         path_queue_add(qi);
     }
@@ -1354,8 +1365,7 @@ static inline void compute_paths(stack_node_t* current_stack, int rule, int leng
         queue_item_t* qi = minipool_queue_item_t_alloc(&mp_queue_item_t);
         qi->stack = current_stack;
         qi->rule = rule;
-        qi->path.length = 0;
-        qi->path.edges = NULL;
+        qi->path = NULL;
 
         path_queue_add(qi);
     }
@@ -1806,9 +1816,10 @@ static void destroy_stack_node_t(void *p)
     while (edge_set != NULL)
     {
         stack_node_edge_set_t *current_edge_set = edge_set;
-        // FIXME!!
-        // decref(current_edge_set->edge);
         edge_set = edge_set->next;
+
+        // FIXME???
+        // decref(current_edge_set->edge);
         minipool_stack_node_edge_set_t_free(&mp_stack_node_edge_set_t, current_edge_set);
     }
 
@@ -1830,23 +1841,23 @@ static inline void reduce_via_path(queue_item_t* qi, int token)
 {
     YYDPRINTF((stderr, "Reducing stack #%d via path for rule r%d\n", stack_id(qi->stack), qi->rule - 1));
 #if ]b4_api_PREFIX[DEBUG
-    if (yydebug)
-    {
-        fprintf(stderr, "Path has length %d: ", qi->path.length);
-        int j;
-        for (j = 0; j < qi->path.length; j++)
-        {
-            stack_node_edge_t* edge = qi->path.edges[j];
-            fprintf(stderr, "s%d [%p]<-", edge->target->state, edge->target);
-        }
-        fprintf(stderr, "[s%d, %p]", qi->stack->state, qi->stack);
-        fprintf(stderr, "\n");
-    }
+    // if (yydebug)
+    // {
+    //     fprintf(stderr, "Path has length %d: ", qi->path.length);
+    //     int j;
+    //     for (j = 0; j < qi->path.length; j++)
+    //     {
+    //         stack_node_edge_t* edge = qi->path.edges[j];
+    //         fprintf(stderr, "s%d [%p]<-", edge->target->state, edge->target);
+    //     }
+    //     fprintf(stderr, "[s%d, %p]", qi->stack->state, qi->stack);
+    //     fprintf(stderr, "\n");
+    // }
 #endif
 
     stack_node_t* left_sibling = qi->stack;
-    if (qi->path.length > 0)
-        left_sibling = qi->path.edges[0]->target;
+    if (qi->path != NULL)
+        left_sibling = qi->path->edge->target;
 
     YYDPRINTF((stderr, "Leftmost stack node in the path is in state s%d\n", left_sibling->state));
 
@@ -1858,13 +1869,21 @@ static inline void reduce_via_path(queue_item_t* qi, int token)
     // Create a deferred payload
     payload_t *payload = new_payload(P_DEFERRED_REDUCE);
     payload->r.rule = qi->rule;
-    payload->r.num_values = qi->path.length;
-    payload->r.values = YYMALLOC(qi->path.length * sizeof(*(payload->r.values)));
-
-    int i;
-    for (i = 0; i < qi->path.length; i++)
+    path_t *current_path = qi->path;
+    int path_length = 0; // FIXME - Remove this when the payload becomes a list
+    while (current_path != NULL)
     {
-        payload->r.values[i] = incref(qi->path.edges[i]->payload);
+        path_length++;
+        current_path = current_path->next;
+    }
+    payload->r.num_values = path_length;
+    payload->r.values = YYMALLOC(path_length * sizeof(*(payload->r.values)));
+
+    current_path = qi->path;
+    int i;
+    for (i = 0; current_path != NULL; current_path = current_path->next, i++)
+    {
+        payload->r.values[i] = incref(current_path->edge->payload);
     }
 
     if (yydebug)
@@ -2479,6 +2498,7 @@ static void init_pools(void)
     minipool_queue_item_t_init(&mp_queue_item_t, 64);
     minipool_path_queue_node_t_init(&mp_path_queue_node_t, 1024);
     minipool_stack_node_edge_set_t_init(&mp_stack_node_edge_set_t, 1024);
+    minipool_path_t_init(&mp_path_t, 64);
 }
 
 static void destroy_pools(void)
