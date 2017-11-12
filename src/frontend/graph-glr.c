@@ -845,6 +845,34 @@ yyisErrorAction (int yyaction)
 
 
 // Mini pool implementation
+//
+#undef DEBUG_POOL
+
+#ifdef DEBUG_POOL
+
+#define DEFINE_CHECK_DOUBLE_FREE(TYPENAME) \
+static void check_double_free_##TYPENAME(minipool_##TYPENAME##_t *mp, TYPENAME *d) \
+{ \
+  minipool_##TYPENAME##_item_t *current = mp->free; \
+  while (current != NULL) \
+  { \
+      if ((TYPENAME*)current == d) \
+      { \
+          internal_error("%s pool: double free with '%p'\n", #TYPENAME, d); \
+      } \
+      current = current->next; \
+  } \
+}
+
+#define CHECK_DOUBLE_FREE(TYPENAME, POOL, PTR) \
+  check_double_free_##TYPENAME(POOL, PTR);
+
+#else
+
+#define DEFINE_CHECK_DOUBLE_FREE(TYPENAME)
+#define CHECK_DOUBLE_FREE(TYPENAME, POOL, PTR)
+
+#endif
 
 #define DEFINE_POOL(TYPENAME) \
 \
@@ -898,10 +926,13 @@ TYPENAME *minipool_##TYPENAME##_alloc(minipool_##TYPENAME##_t *mp) { \
   return &current->datum; \
 } \
 \
+DEFINE_CHECK_DOUBLE_FREE(TYPENAME) \
+\
 void minipool_##TYPENAME##_free(minipool_##TYPENAME##_t *mp, TYPENAME *d) { \
   minipool_##TYPENAME##_item_t *current = \
       (minipool_##TYPENAME##_item_t *)((char *)d - offsetof(minipool_##TYPENAME##_item_t, datum)); \
  \
+  CHECK_DOUBLE_FREE(TYPENAME, mp, d); \
   current->next = mp->free; \
   mp->free = current; \
 } \
@@ -1037,20 +1068,14 @@ struct payload_shift_tag
 };
 
 // Deferred payload
-typedef struct payload_reduce_node_tag
+typedef struct payload_reduce_node_tag payload_reduce_node_t;
+struct payload_reduce_node_tag
 {
     payload_t* payload;
-    struct payload_reduce_node_t* next;
-} payload_reduce_node_t;
-
-typedef struct payload_node_tag payload_node_t;
-struct payload_node_tag
-{
-    payload_t* payload;
-    struct payload_node_tag *next;
+    struct payload_reduce_node_tag *next;
 };
-DEFINE_POOL(payload_node_t);
-minipool_payload_node_t_t mp_payload_node_t;
+DEFINE_POOL(payload_reduce_node_t);
+minipool_payload_reduce_node_t_t mp_payload_reduce_node_t;
 
 typedef struct payload_reduce_tag payload_reduce_t;
 struct payload_reduce_tag
@@ -1058,7 +1083,7 @@ struct payload_reduce_tag
     yyRuleNum rule;
     YYSTYPE yyval;
     ]b4_locations_if([YYLTYPE yyloc;])[
-    payload_node_t *values;
+    payload_reduce_node_t *values;
 };
 
 // The payload of an edge
@@ -1086,7 +1111,7 @@ static void walk_payload_t(void *p, void (*callback)(void*))
     if (payload->kind == P_DEFERRED_REDUCE
             || payload->kind == P_DEFINITIVE_REDUCE)
     {
-        payload_node_t* pn = payload->r.values;
+        payload_reduce_node_t* pn = payload->r.values;
         while (pn != NULL)
         {
             callback(pn->payload);
@@ -1103,13 +1128,13 @@ static void destroy_payload_t(void *p)
     if (payload->kind == P_DEFERRED_REDUCE
             || payload->kind == P_DEFINITIVE_REDUCE)
     {
-        payload_node_t* pn = payload->r.values;
+        payload_reduce_node_t* pn = payload->r.values;
         while (pn != NULL)
         {
-            payload_node_t* current_pn = pn;
+            payload_reduce_node_t* current_pn = pn;
             pn = pn->next;
 
-            minipool_payload_node_t_free(&mp_payload_node_t, current_pn);
+            minipool_payload_reduce_node_t_free(&mp_payload_reduce_node_t, current_pn);
         }
     }
     minipool_payload_t_free(&mp_payload_t, payload);
@@ -1504,103 +1529,102 @@ static inline stack_node_t* gss_find_stack_node(int dest_state)
 
 #if ]b4_api_PREFIX[DEBUG
 
-static inline void print_payload(payload_t* p);
-
-static inline void print_single_payload(payload_t* p YY_ATTRIBUTE_UNUSED)
+static void print_indent(int level)
 {
-    YYASSERT(0 && "Not implemented");
-#if 0
+    int i;
+    for (i = 0; i < level; i++)
+    {
+        fprintf(stderr, "|");
+    }
+}
+
+static inline void print_payload(payload_t* p, int level);
+
+static inline void print_single_payload(payload_t* p, int level)
+{
     switch (p->kind)
     {
         case P_DEFINITIVE_SHIFT:
         case P_DEFERRED_SHIFT:
-            fprintf(stderr, "%s shift %zd",
-                    p->kind == P_DEFINITIVE_SHIFT ? "definitive" : "deferred",
-                    p->s.yyposn);
-            break;
+            {
+                print_indent(level);
+                fprintf(stderr, "- %s Shift %zd [%p]\n",
+                        p->kind == P_DEFINITIVE_SHIFT ? "Definitive" : "Deferred",
+                        p->s.yyposn,
+                        p);
+                break;
+            }
         case P_DEFINITIVE_REDUCE:
         case P_DEFERRED_REDUCE:
-            fprintf(stderr, "%s reduce rule: r%d (",
-                    p->kind == P_DEFINITIVE_REDUCE ? "definitive" : "deferred",
-                    p->r.rule - 1);
-            int i;
-            for (i = 0; i < p->r.num_values; i++)
             {
-                if (i > 0)
-                    fprintf(stderr, ", ");
-
-                print_payload(p->r.values[i]);
+                print_indent(level);
+                fprintf(stderr, "- %s Reduce Rule: r%d [%p]\n",
+                        p->kind == P_DEFINITIVE_REDUCE ? "Definitive" : "Deferred",
+                        p->r.rule - 1,
+                        p);
+                print_indent(level);
+                fprintf(stderr, "- Payloads of reduce rule\n");
+                payload_reduce_node_t* prn = p->r.values;
+                while (prn != NULL)
+                {
+                    print_payload(prn->payload, level + 1);
+                    prn = prn->next;
+                }
+                break;
             }
-            fprintf(stderr, ")");
-            break;
         default:
             YYASSERT(false);
     }
-#endif
 }
 
-static inline void print_payload(payload_t* p)
+static inline void print_payload(payload_t* p, int level)
 {
     payload_t* d;
-    int num_items = 0;
+    int i = 0;
+    print_indent(level);
+    fprintf(stderr, "- Payloads\n");
     for (d = p; d != NULL; d = d->next)
     {
-        num_items++;
+        print_indent(level + 1);
+        fprintf(stderr, "- Payload %d [refs=%d]\n", i, d->_ref.refs);
+        print_single_payload(d, level + 2);
+        i++;
     }
-    fprintf(stderr, "[num-payloads: %d", num_items);
-    for (d = p; d != NULL; d = d->next)
-    {
-        if (d != p)
-            fprintf(stderr, ", ");
-
-        fprintf(stderr, "(");
-        print_single_payload(d);
-        fprintf(stderr, ")");
-    }
-    fprintf(stderr, "]");
 }
 
-static inline void print_edge(stack_node_edge_t* edge)
+static inline void print_edge(stack_node_edge_t* edge, int level)
 {
-    print_payload(edge->payload);
+    print_payload(edge->payload, level);
 }
 
-static inline void print_stack_rec(stack_node_t* stack YY_ATTRIBUTE_UNUSED)
+static inline void print_stack_rec(stack_node_t* stack, int level)
 {
-#if 0
-    fprintf(stderr, "s%d [%p]", stack->state, stack);
+    print_indent(level);
+    fprintf(stderr, "- State %d [%p]\n", stack->state, stack);
 
-    switch (stack->num_preds)
+    if (stack->preds == NULL)
     {
-        case 0:
-            break;
-        case 1:
-            fprintf(stderr, "--");
-            print_edge(stack->preds[0]);
-            fprintf(stderr, "-->");
-            print_stack_rec(stack->preds[0]->target);
-            break;
-        default:
-            {
-                fprintf(stderr, "->{{ ");
-                int i;
-                for (i = 0; i < stack->num_preds; i++)
-                {
-                    if (i > 0)
-                        fprintf(stderr, " || ");
-
-                    fprintf(stderr, "--");
-                    print_edge(stack->preds[i]);
-                    fprintf(stderr, "-->");
-
-                    print_stack_rec(stack->preds[i]->target);
-                }
-                fprintf(stderr, " }}");
-            }
-            break;
+        // Do nothing
+        print_indent(level + 1);
+        fprintf(stderr, "<<empty stack>>\n");
     }
-#endif
-    YYASSERT(0 && "Not yet implemented");
+    else
+    {
+        // More than one predecessor
+        int i = 0;
+        stack_node_edge_set_t* preds = stack->preds;
+        while (preds != NULL)
+        {
+            print_indent(level + 1);
+            fprintf(stderr, "- Predecessor %d [%p]\n", i, preds->edge);
+            print_edge(preds->edge, level + 2);
+
+            print_stack_rec(preds->edge->target, level);
+
+            preds = preds->next;
+            i++;
+        }
+    }
 }
 
 static inline void print_stacks(void)
@@ -1624,9 +1648,11 @@ static inline void print_stacks(void)
     while (it != NULL)
     {
         stack_node_t* current_stack = it->stack;
-        fprintf(stderr, "Stack #%d: ", i);
-        print_stack_rec(current_stack);
-        fprintf(stderr, "\n");
+        fprintf(stderr, "************\n");
+        fprintf(stderr, "Stack #%d\n", i);
+        fprintf(stderr, "************\n");
+        print_stack_rec(current_stack, 0);
+        fprintf(stderr, "\n\n");
         i++;
         it = it->next;
     }
@@ -1885,44 +1911,36 @@ static inline void reduce_via_path(queue_item_t* qi, int token)
     YYDPRINTF((stderr, "Goto state for stack #%d [%p] in state s%d [%p] using rule r%d is s%d\n", stack_id(qi->stack), qi->stack, left_sibling->state, left_sibling, qi->rule - 1, state));
 
     // Create a deferred payload
-    payload_t *payload = new_payload(P_DEFERRED_REDUCE);
-    payload->r.rule = qi->rule;
-    path_t *current_path = qi->path;
-    int path_length = 0; // FIXME - Remove this when the payload becomes a list
-    while (current_path != NULL)
-    {
-        path_length++;
-        current_path = current_path->next;
-    }
+    payload_t *add_payload = new_payload(P_DEFERRED_REDUCE);
+    add_payload->r.rule = qi->rule;
 
-    payload_node_t *head = NULL;
-    payload_node_t *tail = NULL;
-    current_path = qi->path;
-    int i;
-    for (i = 0; current_path != NULL; current_path = current_path->next, i++)
+    payload_reduce_node_t *head = NULL;
+    payload_reduce_node_t *tail = NULL;
+    path_t *current_path = qi->path;
+    for (; current_path != NULL; current_path = current_path->next)
     {
-        payload_node_t *new_payload = minipool_payload_node_t_alloc(&mp_payload_node_t);
-        new_payload->payload = incref(current_path->edge->payload);
-        new_payload->next = NULL;
+        payload_reduce_node_t *payload_reduce_node = minipool_payload_reduce_node_t_alloc(&mp_payload_reduce_node_t);
+        payload_reduce_node->payload = incref(current_path->edge->payload);
+        payload_reduce_node->next = NULL;
 
         if (head == NULL)
         {
-            head = new_payload;
-            tail = new_payload;
+            head = payload_reduce_node;
+            tail = payload_reduce_node;
         }
         else
         {
-            tail->next = new_payload;
-            tail = new_payload;
+            tail->next = payload_reduce_node;
+            tail = payload_reduce_node;
         }
     }
 
-    payload->r.values = head;
+    add_payload->r.values = head;
 
     if (yydebug)
     {
-        YYDPRINTF((stderr, "New derred payload: "));
-        print_payload(payload);
+        YYDPRINTF((stderr, "New deferred payload:\n"));
+        print_payload(add_payload, 1);
         YYDPRINTF((stderr, "\n"));
     }
 
@@ -1953,14 +1971,20 @@ static inline void reduce_via_path(queue_item_t* qi, int token)
 
             // Update in place so this propagates to other stacks that are referring to this payload
             payload_t* payload_tail = link->payload;
-            while (payload_tail->next != NULL)
-                payload_tail = payload_tail->next;
-            payload_tail->next = payload;
-
-            YYDPRINTF((stderr, "Merged payloads: "));
+            YYDPRINTF((stderr, "Payloads before merging:\n"));
             if (yydebug)
             {
-                print_payload(link->payload);
+                print_payload(link->payload, 1);
+            }
+            while (payload_tail->next != NULL)
+                payload_tail = payload_tail->next;
+            payload_tail->next = add_payload;
+
+            YYDPRINTF((stderr, "\n"));
+            YYDPRINTF((stderr, "Merged payloads:\n"));
+            if (yydebug)
+            {
+                print_payload(link->payload, 1);
             }
             YYDPRINTF((stderr, "\n"));
         }
@@ -1969,7 +1993,7 @@ static inline void reduce_via_path(queue_item_t* qi, int token)
             YYDPRINTF((stderr, "There is NOT a link from the stack #%d [%p] to the current stack\n", stack_id(right_sibling), right_sibling));
             // FIXME:
             YYDPRINTF((stderr, "Adding the link\n"));
-            link = stack_node_add_link(left_sibling, right_sibling, payload);
+            link = stack_node_add_link(left_sibling, right_sibling, add_payload);
 
             YYDPRINTF((stderr, "Enqueueing reductions enabled by the new link\n"));
             enqueue_limited_reductions(link, token);
@@ -1984,7 +2008,7 @@ static inline void reduce_via_path(queue_item_t* qi, int token)
 
         YYDPRINTF((stderr, "Adding a link to the newly created stack\n"));
         // FIXME:
-        stack_node_add_link(left_sibling, right_sibling, payload);
+        stack_node_add_link(left_sibling, right_sibling, add_payload);
 
         YYDPRINTF((stderr, "Adding stack into set of stacks\n"));
         gss_add_stack(right_sibling);
@@ -2049,6 +2073,10 @@ static inline void do_reductions(int token)
         {
             YYDPRINTF((stderr, "No more stacks to reduce\n\n"));
             break;
+        }
+        else
+        {
+            YYDPRINTF((stderr, "There are more stacks to reduce\n\n"));
         }
 
         YYDPRINTF((stderr, "\n"));
@@ -2134,6 +2162,7 @@ static inline void do_shifts(int token,
         && gss_stack_is_linear_(last_alive)
         && last_alive->preds != NULL)
     {
+        YYDPRINTF((stderr, "Stack s%d [%p] is the only alive stack and is linear, evaluate its payload\n", last_alive->state, last_alive));
         evaluate_payload(last_alive->preds->edge->payload]b4_user_args[);
     }
 
@@ -2241,7 +2270,7 @@ static inline void evaluate_single_payload(payload_t* d]b4_user_formals[)
             }
         case P_DEFERRED_REDUCE:
             {
-                payload_node_t *pn = d->r.values;
+                payload_reduce_node_t *pn = d->r.values;
                 while (pn != NULL)
                 {
                     evaluate_payload(pn->payload]b4_user_args[);
@@ -2285,6 +2314,7 @@ static inline void evaluate_single_payload(payload_t* d]b4_user_formals[)
                     pn->payload = NULL;
                     pn = pn->next;
                 }
+                // d->r.values = NULL;
 
                 break;
             }
@@ -2356,8 +2386,8 @@ static inline char identical_payloads(payload_t *pd0, payload_t *pd1)
         if (pd0->r.rule != pd1->r.rule)
             return 0;
 
-        payload_node_t *pn0 = pd0->r.values;
-        payload_node_t *pn1 = pd1->r.values;
+        payload_reduce_node_t *pn0 = pd0->r.values;
+        payload_reduce_node_t *pn1 = pd1->r.values;
 
         while (pn0 != NULL && pn1 != NULL)
         {
@@ -2501,11 +2531,16 @@ static inline void evaluate_payload(payload_t* p]b4_user_formals[)
             evaluate_single_payload(pd_best]b4_user_args[);
         }
 
-        decref(pd_best->next);
-        pd_best->next = NULL;
-        incref(pd_best);
-        decref(p);
-        *p = *pd_best;
+        // pd_best is the payload we want here, so propagate it to p
+        if (p != pd_best)
+        {
+            p->kind = pd_best->kind;
+            set_yyval_of_payload(p, get_yyval_of_payload(pd_best));
+        }
+
+        // Now make sure this payload represents a single semantic value.
+        decref(p->next);
+        p->next = NULL;
     }
     else
     {
@@ -2520,7 +2555,7 @@ static void init_pools(void)
     minipool_stack_node_set_t_init(&mp_stack_node_set_t, 1024);
 
     minipool_payload_t_init(&mp_payload_t, 1024);
-    minipool_payload_node_t_init(&mp_payload_node_t, 1024);
+    minipool_payload_reduce_node_t_init(&mp_payload_reduce_node_t, 1024);
 
     minipool_stack_node_edge_set_t_init(&mp_stack_node_edge_set_t, 1024);
 
@@ -2536,7 +2571,7 @@ static void destroy_pools(void)
     minipool_stack_node_set_t_destroy(&mp_stack_node_set_t);
 
     minipool_payload_t_destroy(&mp_payload_t);
-    minipool_payload_node_t_destroy(&mp_payload_node_t);
+    minipool_payload_reduce_node_t_destroy(&mp_payload_reduce_node_t);
 
     minipool_stack_node_edge_set_t_destroy(&mp_stack_node_edge_set_t);
 
