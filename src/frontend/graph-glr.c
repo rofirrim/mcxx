@@ -2513,28 +2513,6 @@ static inline void evaluate_payload(payload_t* p]b4_user_formals[)
     }
 }
 
-#if 0
-static inline void process_deferred_actions(int dummy]b4_user_formals[)
-{
-    YYUSE(dummy);
-    YYDPRINTF((stderr, "Processing deferred actions\n"));
-    stack_node_t* current = gss.stacks[0];
-
-    for (;;)
-    {
-        YYDPRINTF((stderr, "Current state being processed is state s%d [%p]\n", current->state, current));
-        if (current->preds == NULL)
-            break;
-
-        payload_t* p = current->preds[0]->payload;
-        evaluate_payload(p]b4_user_args[);
-        current = current->preds[0]->target;
-    }
-
-    YYDPRINTF((stderr, "Done processing deferred actions\n"));
-}
-#endif
-
 static void init_pools(void)
 {
     minipool_stack_node_t_init(&mp_stack_node_t, 1024);
