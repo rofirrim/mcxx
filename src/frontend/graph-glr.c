@@ -1052,9 +1052,8 @@ typedef enum payload_kind_tag payload_kind_t;
 enum payload_kind_tag
 {
     P_INVALID = 0,
-    P_DEFINITIVE_SHIFT,
+    P_SHIFT,
     P_DEFINITIVE_REDUCE,
-    P_DEFERRED_SHIFT,
     P_DEFERRED_REDUCE,
 };
 
@@ -1156,8 +1155,7 @@ static inline char payload_is_reduce(payload_t* p)
 
 static inline char payload_is_shift(payload_t* p)
 {
-    return p->kind == P_DEFERRED_SHIFT
-        || p->kind == P_DEFINITIVE_SHIFT;
+    return p->kind == P_SHIFT;
 }
 
 static stack_node_set_t *gss;
@@ -1381,7 +1379,6 @@ static inline void compute_paths_rec(
     }
 }
 
-
 static inline void compute_paths(stack_node_t* current_stack, int rule, int length)
 {
     YYDPRINTF((stderr, "Computing paths of length %d for rule r%d\n", length, rule - 1));
@@ -1544,12 +1541,10 @@ static inline void print_single_payload(payload_t* p, int level)
 {
     switch (p->kind)
     {
-        case P_DEFINITIVE_SHIFT:
-        case P_DEFERRED_SHIFT:
+        case P_SHIFT:
             {
                 print_indent(level);
-                fprintf(stderr, "- %s Shift %zd [%p]\n",
-                        p->kind == P_DEFINITIVE_SHIFT ? "Definitive" : "Deferred",
+                fprintf(stderr, "- Shift %zd [%p]\n",
                         p->s.yyposn,
                         p);
                 break;
@@ -1675,6 +1670,18 @@ static inline int stack_id(stack_node_t* stack)
 }
 #endif
 
+static inline void evaluate_payload(payload_t* p]b4_user_formals[);
+static inline stack_node_t* new_stack(yyStateNum state);
+static inline YYSTYPE get_yyval_of_payload(payload_t* p);
+
+]b4_locations_if([
+static inline YYLTYPE get_yyloc_of_payload(payload_t* p);
+])[
+
+static inline stack_node_edge_t* stack_node_add_link(stack_node_t* target,
+        stack_node_t* source,
+        payload_t *payload);
+
 static inline void enqueue_reductions(stack_node_t* stack, int token)
 {
     YYDPRINTF((stderr, "Enqueueing reductions for stack #%d\n", stack_id(stack)));
@@ -1684,8 +1691,8 @@ static inline void enqueue_reductions(stack_node_t* stack, int token)
         int rule = yydefaultAction (stack->state);
         if (rule != 0)
         {
-            YYDPRINTF((stderr, "Stack #%d [%p] has a default action with rule r%d\n", stack_id(stack), stack, rule - 1));
             int len = get_rule_length(rule);
+            YYDPRINTF((stderr, "Stack #%d [%p] in state s%d has a default action with rule r%d, length is %d\n", stack_id(stack), stack, stack->state, rule - 1, len));
             compute_paths(stack, rule, len);
         }
     }
@@ -1706,12 +1713,14 @@ static inline void enqueue_reductions(stack_node_t* stack, int token)
         else
         {
             int rule = -action;
+            int len = get_rule_length(rule);
 
-            YYDPRINTF((stderr, "Immediate action for stack #%d [%p] is a reduce with rule r%d\n", stack_id(stack), stack, rule - 1));
+            YYDPRINTF((stderr, "Immediate action for stack #%d [%p] in state s%d is a reduce with rule r%d, length is %d. Conflicts? %s\n", stack_id(stack), stack, stack->state, rule - 1,
+                        len,
+                        *conflicts == 0 ? "no" : "yes"));
             // It should be a reduce
 
             YYDPRINTF((stderr, "Reducing stack #%d [%p] by rule r%d\n", stack_id(stack), stack, rule - 1));
-            int len = get_rule_length(rule);
 
             compute_paths(stack, rule, len);
         }
@@ -1731,9 +1740,10 @@ static inline void enqueue_reductions(stack_node_t* stack, int token)
 
             int rule = *conflicts;
 
-            YYDPRINTF((stderr, "Stack #%d [%p] has a conflictive reduction with rule r%d\n", stack_id(stack), stack, rule - 1));
-
             int len = get_rule_length(rule);
+
+            YYDPRINTF((stderr, "Stack #%d [%p] has a conflictive reduction with rule r%d with length %d\n", stack_id(stack), stack, rule - 1, len));
+
 
             compute_paths(stack, rule, len);
 
@@ -1903,7 +1913,7 @@ static inline void reduce_via_path(queue_item_t* qi, int token)
     if (qi->path != NULL)
         left_sibling = qi->path->edge->target;
 
-    YYDPRINTF((stderr, "Leftmost stack node in the path is in state s%d\n", left_sibling->state));
+    YYDPRINTF((stderr, "Leftmost stack node in the path is in state s%d. Rule used %d\n", left_sibling->state, qi->rule));
 
     yyStateNum state = yyLRgotoState (left_sibling->state,
             yylhsNonterm (qi->rule));
@@ -2030,7 +2040,8 @@ static inline char gss_stack_is_linear_(stack_node_t* stack)
     return true;
 }
 
-static inline void do_reductions(int token)
+static inline void do_reductions(int token
+        ]b4_user_formals[)
 {
     YYDPRINTF((stderr, "Doing reductions\n"));
 #if ]b4_api_PREFIX[DEBUG
@@ -2039,6 +2050,138 @@ static inline void do_reductions(int token)
 
     YYASSERT(path_queue_is_empty());
 
+    while (gss->next == NULL)
+    {
+        YYDPRINTF((stderr, "Attempting deterministic reduction because there is only one stack.\n"));
+        stack_node_t* current_stack = gss->stack;
+        if (yydebug)
+        {
+            print_stack_rec(current_stack, 0);
+        }
+
+        char do_reduction = 0;
+        int rule = 0;
+        int len = 0;
+        const short int* conflicts = NULL;
+        if (yyisDefaultedState(current_stack->state))
+        {
+            rule = yydefaultAction(current_stack->state);
+            if (rule != 0)
+            {
+                len = get_rule_length(rule);
+                YYDPRINTF((stderr, "Stack #%d [%p] in state s%d has a default action with rule r%d, length is %d\n", stack_id(current_stack), current_stack, current_stack->state, rule - 1, len));
+                do_reduction = 1;
+            }
+        }
+        else
+        {
+            int action = 0;
+            yygetLRActions(current_stack->state, token, &action, &conflicts);
+
+            if (yyisShiftAction(action))
+            {
+                // Do nothing
+            }
+            else if (yyisErrorAction(action))
+            {
+                // Do nothing
+            }
+            else 
+            {
+                // Reduction
+                rule = -action;
+                len = get_rule_length(rule);
+                do_reduction = (*conflicts == 0);
+
+                YYDPRINTF((stderr, "Immediate action for stack #%d [%p] in state s%d is a reduce with rule r%d, length is %d. Conflicts? %s\n", stack_id(current_stack), current_stack, current_stack->state, rule - 1,
+                            len,
+                            *conflicts == 0 ? "no" : "yes"));
+            }
+        }
+
+        if (do_reduction)
+        {
+            // Do a deterministic reduction.
+            // FIXME - Encapsulate this in a function
+            YYSTYPE yyval;
+            ]b4_locations_if([YYLTYPE yyloc;])[
+
+            YYSTYPE in_yyval[len + 1];
+            ]b4_locations_if([
+                    YYLTYPE in_yyloc@{len + 1@};
+            ])[
+
+            char deterministic_reduction_possible = 1;
+            stack_node_t* popped_stack = current_stack;
+            int i = len - 1;
+            while (i >= 0)
+            {
+                if (popped_stack->preds->next != NULL)
+                {
+                    deterministic_reduction_possible = 0;
+                    YYDPRINTF((stderr, "Deterministic reduction: not possible because stack [%p] in state s%d has more than one predecessor.\n\n", popped_stack, popped_stack->state));
+                    break;
+                }
+
+                payload_t *current_payload = popped_stack->preds->edge->payload;
+
+                evaluate_payload(current_payload]b4_user_args[);
+                in_yyval[i] = get_yyval_of_payload(current_payload);
+                ]b4_locations_if([in_yyloc@{i@} = get_yyloc_of_payload(current_payload);])[
+
+                    popped_stack = popped_stack->preds->edge->target;
+                i--;
+            }
+
+            if (!deterministic_reduction_possible)
+                break;
+
+            YYDPRINTF((stderr, "Deterministic reduction is possible using rule %d, length is %d\n", rule - 1, len));
+
+            yyStateNum reduced_state = yyLRgotoState (popped_stack->state, yylhsNonterm(rule));
+            YYDPRINTF((stderr, "Deterministic reduction: New state is s%d\n", reduced_state));
+            YYDPRINTF((stderr, "Deterministic reduction: Leftmost stack node is in state s%d. Rule used %d\n", popped_stack->state, rule));
+
+            stack_node_t* reduced_stack = new_stack(reduced_state);
+
+            user_action(rule,
+                    &yyval ]b4_locations_if([, &yyloc])[,
+                    len, in_yyval ]b4_locations_if([, in_yyloc])[
+                    ]b4_user_args[);
+
+            payload_t *add_payload = new_payload(P_DEFINITIVE_REDUCE);
+            add_payload->r.rule = rule;
+            add_payload->r.yyval = yyval;
+            add_payload->r.values = NULL;
+
+            stack_node_add_link(popped_stack, reduced_stack, add_payload);
+
+            decref(current_stack);
+
+            gss->stack = reduced_stack;
+
+            YYDPRINTF((stderr, "Deterministic reduction finished\n"));
+            if (yydebug)
+            {
+                print_stack_rec(gss->stack, 0);
+            }
+            YYDPRINTF((stderr, "\n"));
+        }
+        else if (conflicts == NULL || (*conflicts == 0))
+        {
+            YYDPRINTF((stderr, "Deterministic reduction: no more deterministic reductions are possible.\n\n"));
+            // We are done
+            return;
+        }
+        else
+        {
+            YYDPRINTF((stderr, "Deterministic reduction: not possible because of conflicting actions.\n\n"));
+            // Move on to non-deterministic reduction.
+            break;
+        }
+    }
+
+    YYDPRINTF((stderr, "Non-deterministic reduction\n"));
     // int first_stack_reduced = 0;
     stack_node_set_t* final_it = NULL;
     for (;;)
@@ -2046,6 +2189,7 @@ static inline void do_reductions(int token)
         stack_node_set_t* initial_gss = gss;
 
         stack_node_set_t *it = gss;
+
         while (it != final_it)
         {
             stack_node_t* current_stack = it->stack;
@@ -2097,8 +2241,6 @@ static inline void do_reductions(int token)
     }
 }
 
-static inline void evaluate_payload(payload_t* p]b4_user_formals[);
-
 static inline void do_shifts(int token,
         size_t yyposn,
         YYSTYPE *yyval
@@ -2112,105 +2254,125 @@ static inline void do_shifts(int token,
 #endif
 
     stack_node_set_t *old_gss = gss;
-
-    // clear gss
+    // Clear gss
     gss = NULL;
 
-    int currently_active = 0;
-    stack_node_t* last_alive = NULL;
-
-    stack_node_set_t *it = old_gss;
-    stack_node_set_t *prev = NULL;
-    while (it != NULL)
+    if (old_gss->next == NULL)
     {
-        stack_node_t* current_stack = it->stack;
+        YYDPRINTF((stderr, "Simple shift\n"));
+        stack_node_t* current_stack = old_gss->stack;
 
         int action = 0;
         const short int* conflicts;
         yygetLRActions(current_stack->state, token, &action, &conflicts);
 
-        if (yyisShiftAction(action))
+        if (!yyisShiftAction(action))
         {
-            // we will process these in the next loop
-            last_alive = current_stack;
-            currently_active++;
-
-            prev = it;
-            it = it->next;
+            YYDPRINTF((stderr, "Stack s%d [%p] does not have to shift, so it dies\n", current_stack->state, current_stack));
+            decref(current_stack);
+            minipool_stack_node_set_t_free(&mp_stack_node_set_t, old_gss);
         }
         else
         {
-            stack_node_set_t* current_it = it;
-            if (prev != NULL)
+            int dest_state = action;
+
+            stack_node_t* right_sibling = new_stack(dest_state);
+
+            payload_t *payload = new_payload(P_SHIFT);
+            payload->s.yyposn = yyposn;
+            payload->s.yyval = *yyval;
+            ]b4_locations_if([payload->s.yyloc = *yyloc;])[
+                stack_node_add_link(current_stack, right_sibling, payload);
+            decref(current_stack);
+
+            old_gss->stack = right_sibling;
+            gss = old_gss;
+        }
+    }
+    else
+    {
+        YYDPRINTF((stderr, "Multi stack shift\n"));
+        stack_node_set_t *it = old_gss;
+        stack_node_set_t *prev = NULL;
+        while (it != NULL)
+        {
+            stack_node_t* current_stack = it->stack;
+
+            int action = 0;
+            const short int* conflicts;
+            yygetLRActions(current_stack->state, token, &action, &conflicts);
+
+            if (yyisShiftAction(action))
             {
-                prev->next = it->next;
+                prev = it;
+                it = it->next;
             }
             else
             {
-                old_gss = it->next;
+                stack_node_set_t* current_it = it;
+                if (prev != NULL)
+                {
+                    prev->next = it->next;
+                }
+                else
+                {
+                    old_gss = it->next;
+                }
+                it = it->next;
+                // Free dead stack
+                decref(current_stack);
+                // Free dead stack item
+                minipool_stack_node_set_t_free(&mp_stack_node_set_t, current_it);
+                YYDPRINTF((stderr, "Stack s%d [%p] does not have to shift, so it dies\n", current_stack->state, current_stack));
             }
-            it = it->next;
-            // Free dead stack
+        }
+
+        it = old_gss;
+        while (it != NULL)
+        {
+            stack_node_t* current_stack = it->stack;
+
+            int action = 0;
+            const short int* conflicts;
+            yygetLRActions(current_stack->state, token, &action, &conflicts);
+
+            // Only real shifts at this point
+            YYASSERT(yyisShiftAction(action));
+
+            int dest_state = action;
+            YYDPRINTF((stderr, "Shifting stack [%p]. Currently in state s%d, New state is s%d\n", current_stack, current_stack->state, dest_state));
+
+            stack_node_t* right_sibling = gss_find_stack_node(dest_state);
+            if (right_sibling == NULL)
+            {
+                YYDPRINTF((stderr, "Adding new stack node in state s%d\n", dest_state));
+                right_sibling = new_stack(dest_state);
+                YYDPRINTF((stderr, "Adding newly created stack to set of stacks\n"));
+                gss_add_stack(right_sibling);
+            }
+            else
+            {
+                YYDPRINTF((stderr, "Reusing existing stack node already in state s%d\n", dest_state));
+            }
+
+            payload_t *payload = new_payload(P_SHIFT);
+            payload->s.yyposn = yyposn;
+            payload->s.yyval = *yyval;
+            ]b4_locations_if([payload->s.yyloc = *yyloc;])[
+            stack_node_add_link(current_stack, right_sibling, payload);
             decref(current_stack);
-            // Free dead stack item
+
+            it = it->next;
+        }
+
+        // Free old stack set
+        it = old_gss;
+        while (it != NULL)
+        {
+            stack_node_set_t* current_it = it;
+            it = it->next;
             minipool_stack_node_set_t_free(&mp_stack_node_set_t, current_it);
-            YYDPRINTF((stderr, "Stack s%d [%p] does not have to shift, so it dies\n", current_stack->state, current_stack));
         }
-    }
-
-    if (currently_active == 1
-        && gss_stack_is_linear_(last_alive)
-        && last_alive->preds != NULL)
-    {
-        YYDPRINTF((stderr, "Stack s%d [%p] is the only alive stack and is linear, evaluate its payload\n", last_alive->state, last_alive));
-        evaluate_payload(last_alive->preds->edge->payload]b4_user_args[);
-    }
-
-    it = old_gss;
-    while (it != NULL)
-    {
-        stack_node_t* current_stack = it->stack;
-
-        int action = 0;
-        const short int* conflicts;
-        yygetLRActions(current_stack->state, token, &action, &conflicts);
-
-        // Only real shifts at this point
-        YYASSERT(yyisShiftAction(action));
-
-        int dest_state = action;
-        YYDPRINTF((stderr, "Shifting stack [%p]. Currently in state s%d, New state is s%d\n", current_stack, current_stack->state, dest_state));
-
-        stack_node_t* right_sibling = gss_find_stack_node(dest_state);
-        if (right_sibling == NULL)
-        {
-            YYDPRINTF((stderr, "Adding new stack node in state s%d\n", dest_state));
-            right_sibling = new_stack(dest_state);
-            YYDPRINTF((stderr, "Adding newly created stack to set of stacks\n"));
-            gss_add_stack(right_sibling);
-        }
-        else
-        {
-            YYDPRINTF((stderr, "Reusing existing stack node already in state s%d\n", dest_state));
-        }
-
-        payload_t *payload = new_payload(P_DEFERRED_SHIFT);
-        payload->s.yyposn = yyposn;
-        payload->s.yyval = *yyval;
-        ]b4_locations_if([payload->s.yyloc = *yyloc;])[
-        stack_node_add_link(current_stack, right_sibling, payload);
-        decref(current_stack);
-
-        it = it->next;
-    }
-
-    // Free old stack set
-    it = old_gss;
-    while (it != NULL)
-    {
-        stack_node_set_t* current_it = it;
-        it = it->next;
-        minipool_stack_node_set_t_free(&mp_stack_node_set_t, current_it);
     }
 }
 
@@ -2218,7 +2380,7 @@ static inline YYSTYPE get_yyval_of_payload(payload_t* p)
 {
     switch (p->kind)
     {
-        case P_DEFINITIVE_SHIFT:
+        case P_SHIFT:
             return p->s.yyval;
         case P_DEFINITIVE_REDUCE:
             return p->r.yyval;
@@ -2231,7 +2393,7 @@ static inline void set_yyval_of_payload(payload_t* p, YYSTYPE yyval)
 {
     switch (p->kind)
     {
-        case P_DEFINITIVE_SHIFT:
+        case P_SHIFT:
             p->s.yyval = yyval;
             break;
         case P_DEFINITIVE_REDUCE:
@@ -2248,7 +2410,7 @@ static inline YYLTYPE get_yyloc_of_payload(payload_t* p)
 {
     switch (p->kind)
     {
-        case P_DEFINITIVE_SHIFT:
+        case P_SHIFT:
             return p->s.yyloc;
         case P_DEFINITIVE_REDUCE:
             return p->r.yyloc;
@@ -2263,11 +2425,6 @@ static inline void evaluate_single_payload(payload_t* d]b4_user_formals[)
 {
     switch (d->kind)
     {
-        case P_DEFERRED_SHIFT:
-            {
-                d->kind = P_DEFINITIVE_SHIFT;
-                break;
-            }
         case P_DEFERRED_REDUCE:
             {
                 payload_reduce_node_t *pn = d->r.values;
@@ -2318,7 +2475,7 @@ static inline void evaluate_single_payload(payload_t* d]b4_user_formals[)
 
                 break;
             }
-        case P_DEFINITIVE_SHIFT:
+        case P_SHIFT:
         case P_DEFINITIVE_REDUCE:
             break;
         default:
@@ -2328,9 +2485,9 @@ static inline void evaluate_single_payload(payload_t* d]b4_user_formals[)
 
 static inline void merge_payloads(int yyn, payload_t* p0, payload_t* p1)
 {
-  YYASSERT(p0->kind == P_DEFINITIVE_SHIFT
+  YYASSERT(p0->kind == P_SHIFT
           || p0->kind == P_DEFINITIVE_REDUCE);
-  YYASSERT(p1->kind == P_DEFINITIVE_SHIFT
+  YYASSERT(p1->kind == P_SHIFT
           || p1->kind == P_DEFINITIVE_REDUCE);
 
   YYSTYPE yyval0 = get_yyval_of_payload(p0);
@@ -2646,7 +2803,7 @@ b4_dollar_popdef])[]dnl
             YYDPRINTF((stderr, "----------------------------------------\n"));
         }
 
-        do_reductions(yytoken);
+        do_reductions(yytoken]b4_user_args[);
         do_shifts(yytoken, yyposn, &yylval]b4_locations_if([, &yylloc])[]b4_user_args[);
         yyposn++;
 
