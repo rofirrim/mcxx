@@ -2152,6 +2152,7 @@ static inline void do_reductions(int token
             payload_t *add_payload = new_payload(P_DEFINITIVE_REDUCE);
             add_payload->r.rule = rule;
             add_payload->r.yyval = yyval;
+            add_payload->r.yyloc = yyloc;
             add_payload->r.values = NULL;
 
             stack_node_add_link(popped_stack, reduced_stack, add_payload);
