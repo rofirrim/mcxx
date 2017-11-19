@@ -1147,17 +1147,6 @@ static inline payload_t* new_payload(payload_kind_t kind)
     return payload;
 }
 
-static inline char payload_is_reduce(payload_t* p)
-{
-    return p->kind == P_DEFERRED_REDUCE
-        || p->kind == P_DEFINITIVE_REDUCE;
-}
-
-static inline char payload_is_shift(payload_t* p)
-{
-    return p->kind == P_SHIFT;
-}
-
 static stack_node_set_t *gss;
 
 static inline void gss_init(void)
@@ -1508,11 +1497,23 @@ user_action (yyRuleNum yyn,
 # undef YYRECOVERING
 }
 
-// FIXME: can we do this faster?
-static inline stack_node_t* gss_find_stack_node(int dest_state)
+static inline char payload_is_reduce(payload_t* p)
 {
-    stack_node_set_t *it = gss;
-    while (it != NULL)
+    return p->kind == P_DEFERRED_REDUCE
+        || p->kind == P_DEFINITIVE_REDUCE;
+}
+
+static inline char payload_is_shift(payload_t* p)
+{
+    return p->kind == P_SHIFT;
+}
+
+
+// FIXME: can we do this faster?
+static inline stack_node_t* gss_find_stack_node_in_range(int dest_state, stack_node_set_t* begin, stack_node_set_t* end)
+{
+    stack_node_set_t *it = begin;
+    while (it != end)
     {
         stack_node_t* stack = it->stack;
         if (stack->state == dest_state)
@@ -1523,6 +1524,10 @@ static inline stack_node_t* gss_find_stack_node(int dest_state)
     return NULL;
 }
 
+static inline stack_node_t* gss_find_stack_node(int dest_state)
+{
+    return gss_find_stack_node_in_range(dest_state, gss, NULL);
+}
 
 #if ]b4_api_PREFIX[DEBUG
 
@@ -1891,6 +1896,46 @@ static inline stack_node_t* new_stack(yyStateNum state)
     return stack;
 }
 
+static inline char identical_payloads(payload_t *pd0, payload_t *pd1)
+{
+    if (pd0 == pd1)
+        return 1;
+
+    if ((pd0 == NULL) != (pd1 == NULL))
+      return 0;
+
+    if (payload_is_reduce(pd0)
+            && payload_is_reduce(pd1))
+    {
+        if (pd0->r.rule != pd1->r.rule)
+            return 0;
+
+        payload_reduce_node_t *pn0 = pd0->r.values;
+        payload_reduce_node_t *pn1 = pd1->r.values;
+
+        while (pn0 != NULL && pn1 != NULL)
+        {
+            if (!identical_payloads(pn0->payload, pn1->payload))
+                return 0;
+            pn0 = pn0->next;
+            pn1 = pn1->next;
+        }
+        if (pn0 != pn1)
+            return 0;
+
+        return 1;
+    }
+    else if (payload_is_shift(pd0)
+            && payload_is_shift(pd1))
+    {
+        return pd0->s.yyposn == pd1->s.yyposn;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
 static inline void reduce_via_path(queue_item_t* qi, int token)
 {
     YYDPRINTF((stderr, "Reducing stack #%d via path for rule r%d\n", stack_id(qi->stack), qi->rule - 1));
@@ -1986,17 +2031,36 @@ static inline void reduce_via_path(queue_item_t* qi, int token)
             {
                 print_payload(link->payload, 1);
             }
-            while (payload_tail->next != NULL)
-                payload_tail = payload_tail->next;
-            payload_tail->next = add_payload;
+            YYDPRINTF((stderr, "\n"));
 
-            YYDPRINTF((stderr, "\n"));
-            YYDPRINTF((stderr, "Merged payloads:\n"));
-            if (yydebug)
+            char repeated_payload = 0;
+            while (payload_tail->next != NULL)
             {
-                print_payload(link->payload, 1);
+                if (identical_payloads(add_payload, payload_tail))
+                {
+                    repeated_payload = 1;
+                    break;
+                }
+                payload_tail = payload_tail->next;
             }
-            YYDPRINTF((stderr, "\n"));
+            if (!repeated_payload
+                    && !identical_payloads(add_payload, payload_tail))
+            {
+                payload_tail->next = add_payload;
+
+                YYDPRINTF((stderr, "Merged payloads:\n"));
+                if (yydebug)
+                {
+                    print_payload(link->payload, 1);
+                }
+                YYDPRINTF((stderr, "\n"));
+
+            }
+            else
+            {
+                YYDPRINTF((stderr, "Not merging payload because it is repeated.\n"));
+                decref(add_payload);
+            }
         }
         else
         {
@@ -2017,27 +2081,12 @@ static inline void reduce_via_path(queue_item_t* qi, int token)
         right_sibling = new_stack(state);
 
         YYDPRINTF((stderr, "Adding a link to the newly created stack\n"));
-        // FIXME:
-        stack_node_add_link(left_sibling, right_sibling, add_payload);
+
+        /* stack_node_edge_t* link = */ stack_node_add_link(left_sibling, right_sibling, add_payload);
 
         YYDPRINTF((stderr, "Adding stack into set of stacks\n"));
         gss_add_stack(right_sibling);
     }
-}
-
-// Pretty lame approach that we may improve by materializing the "is linear"
-// property elsewhere
-static inline char gss_stack_is_linear_(stack_node_t* stack)
-{
-    while (stack != NULL)
-    {
-        if (stack->preds == NULL)
-            return true;
-        if (stack->preds->next != NULL)
-            return false;
-        stack = stack->preds->edge->target;
-    }
-    return true;
 }
 
 static inline void do_reductions(int token
@@ -2155,7 +2204,7 @@ static inline void do_reductions(int token
             add_payload->r.yyloc = yyloc;
             add_payload->r.values = NULL;
 
-            stack_node_add_link(popped_stack, reduced_stack, add_payload);
+            /* stack_node_edge_t *link = */ stack_node_add_link(popped_stack, reduced_stack, add_payload);
 
             decref(current_stack);
 
@@ -2245,8 +2294,7 @@ static inline void do_reductions(int token
 static inline void do_shifts(int token,
         size_t yyposn,
         YYSTYPE *yyval
-        ]b4_locations_if([, YYLTYPE *yyloc])[
-        ]b4_user_formals[)
+        ]b4_locations_if([, YYLTYPE *yyloc])[)
 {
     YYDPRINTF((stderr, "Doing shifts\n"));
 
@@ -2530,107 +2578,6 @@ static inline int compare_rules(payload_t* pd0, payload_t* pd1)
   return 0;
 }
 
-static inline char identical_payloads(payload_t *pd0, payload_t *pd1)
-{
-    if (pd0 == pd1)
-        return 1;
-
-    if ((pd0 == NULL) != (pd1 == NULL))
-      return 0;
-
-    if (payload_is_reduce(pd0)
-            && payload_is_reduce(pd1))
-    {
-        if (pd0->r.rule != pd1->r.rule)
-            return 0;
-
-        payload_reduce_node_t *pn0 = pd0->r.values;
-        payload_reduce_node_t *pn1 = pd1->r.values;
-
-        while (pn0 != NULL && pn1 != NULL)
-        {
-            if (!identical_payloads(pn0->payload, pn1->payload))
-                return 0;
-            pn0 = pn0->next;
-            pn1 = pn1->next;
-        }
-        if (pn0 != pn1)
-            return 0;
-
-        return 1;
-    }
-    else if (payload_is_shift(pd0)
-            && payload_is_shift(pd1))
-    {
-        return pd0->s.yyposn == pd1->s.yyposn;
-    }
-    else
-    {
-        return 0;
-    }
-}
-
-// This can be largely improved
-static inline void remove_repeated_payloads(payload_t* p)
-{
-    int count = 0;
-    payload_t* p_current = p;
-    while (p_current != NULL)
-    {
-        count++;
-        p_current = p_current->next;
-    }
-
-    YYASSERT(count > 1);
-    payload_t *set[count];
-
-    p_current = p;
-    int i = 0;
-    while (p_current != NULL)
-    {
-        set[i] = p_current;
-        i++;
-        p_current = p_current->next;
-    }
-
-    int j;
-    for (i = 0; i < count; i++)
-    {
-        if (set[i] == NULL)
-            continue;
-
-        for (j = i; j < count; j++)
-        {
-            if (i == j)
-                continue;
-            if (set[j] == NULL)
-                continue;
-
-            if (identical_payloads(set[i], set[j]))
-            {
-                payload_t* remove = set[j];
-
-                remove->next = NULL;
-                decref(remove);
-
-                set[j] = NULL;
-            }
-        }
-    }
-
-    // Rebuild the links
-    payload_t* p_previous = p;
-    for (i = 1; i < count; i++)
-    {
-        if (set[i] != NULL)
-        {
-            p_previous->next = set[i];
-            p_previous = set[i];
-        }
-    }
-    p_previous->next = NULL;
-}
-
 static inline void evaluate_payload(payload_t* p]b4_user_formals[)
 {
     YYASSERT(p != NULL);
@@ -2639,15 +2586,12 @@ static inline void evaluate_payload(payload_t* p]b4_user_formals[)
         // First check priority
         char need_to_merge = 0;
 
-        // remove all repeated payloads
-        remove_repeated_payloads(p);
-
         payload_t* pd_best = p;
         payload_t* pd_current = pd_best->next;
 
         while (pd_current != NULL)
         {
-            YYASSERT(!identical_payloads(pd_current, pd_best));
+            // YYASSERT(!identical_payloads(pd_current, pd_best));
             switch (compare_rules(pd_best, pd_current))
             {
                 case 0:
@@ -2805,7 +2749,7 @@ b4_dollar_popdef])[]dnl
         }
 
         do_reductions(yytoken]b4_user_args[);
-        do_shifts(yytoken, yyposn, &yylval]b4_locations_if([, &yylloc])[]b4_user_args[);
+        do_shifts(yytoken, yyposn, &yylval]b4_locations_if([, &yylloc])[);
         yyposn++;
 
         if (gss == NULL)
