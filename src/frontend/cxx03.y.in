@@ -51,7 +51,12 @@
 
 %}
 
+/*!ifnot GRAPH_GLR*/
 %glr-parser
+/*!endif*/
+/*!if GRAPH_GLR*/
+%graph-glr-parser
+/*!endif*/
 
 %union {
 	token_atrib_t token_atrib;
