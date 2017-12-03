@@ -63,10 +63,6 @@
     const char *text;
 };
 
-
-// This is a specific feature of rofi-bison 2.3
-// %default-merge <ambiguityHandler>
-
 %parse-param {AST* parsed_tree}
 
 %locations
