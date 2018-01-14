@@ -1894,7 +1894,9 @@ then
         AC_SUBST([LLVM_CXXFLAGS])
         LLVM_LDFLAGS="`$LLVM_CONFIG --ldflags` -Wl,-rpath,`$LLVM_CONFIG --libdir`"
         AC_SUBST([LLVM_LDFLAGS])
-        LLVM_LIBS=`$LLVM_CONFIG --libs`
+        LLVM_OWN_LIBS=`$LLVM_CONFIG --libs`
+        LLVM_SYSTEM_LIBS=`$LLVM_CONFIG --system-libs`
+        LLVM_LIBS="$LLVM_OWN_LIBS $LLVM_SYSTEM_LIBS"
         AC_SUBST([LLVM_LIBS])
         LLVM_BINDIR=`$LLVM_CONFIG --bindir`
         AC_SUBST([LLVM_BINDIR])
