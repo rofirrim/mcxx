@@ -1553,7 +1553,7 @@ void FortranVisitorLLVMExpression::visit(const Nodecl::Power &node)
                 llvm::FunctionType::get(complex_type,
                                         { complex_type, complex_type },
                                         /* isVarArg */ false),
-                /* no attributes so far */ llvm::AttributeSet()));
+                /* no attributes so far */ llvm::AttributeList()));
         return llvm_visitor->ir_builder->CreateCall(cpow_fun, { lhs, rhs });
     };
 
@@ -2604,6 +2604,7 @@ void FortranVisitorLLVMExpression::visit(const Nodecl::FunctionCall &node)
         llvm_visitor->dbg_builder->createImportedModule(
             llvm_visitor->dbg_info.function,
             llvm_visitor->get_module(from_module.get_name()),
+            llvm_visitor->dbg_info.file,
             called_sym.get_line());
     }
 
@@ -2615,7 +2616,7 @@ void FortranVisitorLLVMExpression::visit(const Nodecl::FunctionCall &node)
     llvm::Constant *c = llvm_visitor->current_module->getOrInsertFunction(
         mangled_name,
         function_type,
-        /* no attributes so far */ llvm::AttributeSet());
+        /* no attributes so far */ llvm::AttributeList());
     llvm::Function *fun = llvm::cast<llvm::Function>(c);
 
     // Make sure we use the right unprototyped type here. The FE does not

@@ -371,15 +371,15 @@ void FortranLLVM::emit_main(llvm::Function *fortran_program)
         llvm::GlobalValue::PrivateLinkage,
         llvm::ConstantArray::get(options_type, options_values));
 
-    llvm::AttributeSet attributes;
+    llvm::AttributeList attributes;
     attributes = attributes.addAttribute(llvm_context,
-                                         llvm::AttributeSet::FunctionIndex,
+                                         llvm::AttributeList::FunctionIndex,
                                          llvm::Attribute::NoRecurse);
     attributes = attributes.addAttribute(llvm_context,
-                                         llvm::AttributeSet::FunctionIndex,
+                                         llvm::AttributeList::FunctionIndex,
                                          llvm::Attribute::UWTable);
     attributes = attributes.addAttribute(llvm_context,
-                                         llvm::AttributeSet::FunctionIndex,
+                                         llvm::AttributeList::FunctionIndex,
                                          llvm::Attribute::NoUnwind);
     llvm::Constant *c = current_module->getOrInsertFunction(
         "main",

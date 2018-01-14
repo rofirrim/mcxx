@@ -179,7 +179,7 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
     TL::Type function_type;
     std::string mangled_name;
 
-    llvm::AttributeSet attributes;
+    llvm::AttributeList attributes;
 
     if (sym.is_fortran_main_program())
     {
@@ -187,7 +187,7 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
         function_type = TL::Type::get_void_type().get_function_returning(
             TL::ObjectList<TL::Type>());
         attributes = attributes.addAttribute(llvm_context,
-                                             llvm::AttributeSet::FunctionIndex,
+                                             llvm::AttributeList::FunctionIndex,
                                              llvm::Attribute::NoRecurse);
     }
     else
@@ -203,10 +203,10 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
     }
 
     attributes = attributes.addAttribute(llvm_context,
-                                         llvm::AttributeSet::FunctionIndex,
+                                         llvm::AttributeList::FunctionIndex,
                                          llvm::Attribute::UWTable);
     attributes = attributes.addAttribute(llvm_context,
-                                         llvm::AttributeSet::FunctionIndex,
+                                         llvm::AttributeList::FunctionIndex,
                                          llvm::Attribute::NoUnwind);
     // attributes = attributes.addAttribute(llvm_context,
     //         llvm::AttributeSet::FunctionIndex,
@@ -250,10 +250,6 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
     TL::ObjectList<TL::Symbol>::iterator related_symbols_it
         = related_symbols.begin();
 
-    llvm::Function::ArgumentListType &llvm_fun_args = fun->getArgumentList();
-    llvm::Function::ArgumentListType::iterator llvm_fun_args_it
-        = llvm_fun_args.begin();
-
     // We need to handle this context here due to debug info of parameters.
     // A lexical scope should not be created for top level variables.
     Nodecl::Context context = node.get_statements().as<Nodecl::Context>();
@@ -271,8 +267,10 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
     // Register parameters
     clear_mappings();
     int dbg_argno = 1;
+
+    auto llvm_fun_args_it = fun->arg_begin();
     while (related_symbols_it != related_symbols.end()
-           && llvm_fun_args_it != llvm_fun_args.end())
+           && llvm_fun_args_it != fun->arg_end())
     {
         llvm::Value *v = &*llvm_fun_args_it;
         TL::Symbol s = *related_symbols_it;
@@ -289,7 +287,7 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
         {
             // We allow OPTIONAL be NULL (I think implementing OPTIONAL this way
             // violates the standard)
-            llvm::AttributeSet attrs = fun->getAttributes();
+            llvm::AttributeList attrs = fun->getAttributes();
             attrs = attrs.addAttribute(
                 llvm_context, dbg_argno, llvm::Attribute::NonNull);
             if (!s.get_type().no_ref().is_fortran_array())
@@ -330,7 +328,7 @@ void FortranLLVM::visit(const Nodecl::FunctionCode &node)
         llvm_fun_args_it++;
     }
     ERROR_CONDITION(related_symbols_it != related_symbols.end()
-                        || llvm_fun_args_it != llvm_fun_args.end(),
+                        || llvm_fun_args_it != fun->arg_end(),
                     "Mismatch between TL and llvm::Arguments",
                     0);
 
