@@ -1875,6 +1875,19 @@ then
     then
         AC_MSG_ERROR([To enable Fortran LLVM codegen you will need llvm-config])
     else
+        AC_MSG_CHECKING([LLVM version])
+        LLVM_VERSION=`$LLVM_CONFIG --version`
+        case "$LLVM_VERSION" in
+            5.0.*)
+                # OK
+                AC_MSG_RESULT(${LLVM_VERSION})
+                ;;
+            *)
+              AC_MSG_ERROR([Unsupported version of LLVM: ]${LLVM_VERSION})
+              ;;
+        esac
+        # TODO: perhaps AC_SUBST LLVM_VERSION too?
+
         LLVM_CFLAGS="-I`$LLVM_CONFIG --includedir`"
         AC_SUBST([LLVM_CFLAGS])
         LLVM_CXXFLAGS="-I`$LLVM_CONFIG --includedir` -fno-rtti -fno-exceptions -Wno-shadow"
@@ -2704,11 +2717,12 @@ fi
 if test x$is_enabled_fortran_llvm_codegen = xyes;
 then
     echo " Fortran to LLVM IR (EXPERIMENTAL) support is enabled"
-    echo "   LLVM_CONFIG  :" $LLVM_CONFIG
-    echo "   LLVM_CFLAGS  :" $LLVM_CFLAGS
-    echo "   LLVM_CXXFLAGS:" $LLVM_CXXFLAGS
-    echo "   LLVM_LIBS    :" $LLVM_LIBS
-    echo "   LLVM_BINDIR  :" $LLVM_BINDIR
+    echo "   LLVM_CONFIG   :" $LLVM_CONFIG
+    echo "   LLVM Version  :" $LLVM_VERSION
+    echo "   LLVM_CFLAGS   :" $LLVM_CFLAGS
+    echo "   LLVM_CXXFLAGS :" $LLVM_CXXFLAGS
+    echo "   LLVM_LIBS     :" $LLVM_LIBS
+    echo "   LLVM_BINDIR   :" $LLVM_BINDIR
     echo ""
 fi
 
