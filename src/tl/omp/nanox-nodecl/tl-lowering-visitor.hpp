@@ -63,7 +63,7 @@ class LoweringVisitor : public Nodecl::ExhaustiveVisitor<void>
         virtual void visit(const Nodecl::OmpSs::TargetDeclaration& construct);
         virtual void visit(const Nodecl::OpenMP::Task& construct);
         virtual void visit(const Nodecl::OmpSs::TaskCall& construct);
-        virtual void visit(const Nodecl::OpenMP::TaskLoop& construct);
+        virtual void visit(const Nodecl::OpenMP::Taskloop& construct);
         virtual void visit(const Nodecl::OmpSs::TaskExpression& task_expr);
         virtual void visit(const Nodecl::OpenMP::Taskwait& construct);
         virtual void visit(const Nodecl::OpenMP::Taskyield& construct);
@@ -233,7 +233,6 @@ class LoweringVisitor : public Nodecl::ExhaustiveVisitor<void>
         void fill_dependences_internal(
                 Nodecl::NodeclBase ctr,
                 OutlineInfo& outline_info,
-                bool on_wait,
                 int num_static_dependences,
                 int num_dynamic_dependences,
                 Source& num_dependences,

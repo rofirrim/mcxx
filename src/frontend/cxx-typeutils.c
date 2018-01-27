@@ -5012,7 +5012,8 @@ static nodecl_t convert_node_to_ptrdiff_t(nodecl_t n)
                 get_ptrdiff_t_type(),
                 nodecl_get_locus(n));
 
-        if (cv != NULL)
+        if (cv != NULL
+                && !const_value_is_object(cv))
         {
             cv = const_value_cast_to_bytes(
                     cv,
@@ -11664,6 +11665,7 @@ static void get_type_name_string_internal_impl(const decl_context_t* decl_contex
         case TK_AUTO:
         case TK_DECLTYPE_AUTO:
         case TK_BRACED_LIST:
+        case TK_ELLIPSIS:
             {
                 break;
             }
@@ -12149,7 +12151,7 @@ extern inline type_t* get_unknown_dependent_type(void)
     return _dependent_type;
 }
 
-static char is_unknown_dependent_type(type_t* t)
+char is_unknown_dependent_type(type_t* t)
 {
     return (_dependent_type != NULL
             && t != NULL

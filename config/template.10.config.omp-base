@@ -16,6 +16,7 @@ linker_name = @GCC@
 {openmp} fortran_preprocessor_options = -D_OPENMP=200805
 {ompss} preprocessor_options = -D_OMPSS=1
 {ompss} fortran_preprocessor_options = -D_OMPSS=1
+{openmp|ompss} options = --variable=taskloop_as_loop_of_tasks:1
 
 {ompss} options = --variable=ompss_mode:1
 
@@ -32,6 +33,7 @@ linker_name = @GCC@
 {ompss-2} preprocessor_options = -D_OMPSS_2=1
 {ompss-2} fortran_preprocessor_options = -D_OMPSS_2=1
 {ompss-2} options = --variable=ompss_mode:1 --variable=untied_tasks_by_default:1
+{ompss-2,openmp-compatibility} options = --variable=taskloop_as_loop_of_tasks:1
 
 
 #Analysis
@@ -105,7 +107,7 @@ linker_name = @GCC@
 
 # Nanos++ & CUDA
 {@NANOX_GATE@,@ENABLE_CUDA@,ompss} options = --cuda
-{@NANOX_GATE@,@ENABLE_CUDA@,ompss} compiler_phase = libtlnanox-cuda.so
+{@NANOX_GATE@,@ENABLE_CUDA@,ompss,cuda} compiler_phase = libtlnanox-cuda.so
 
 
 # Nanos++ & OpenCL
@@ -168,14 +170,7 @@ linker_options = -Xlinker --enable-new-dtags
 
 # dlb
 {@DLB_GATE@} preprocessor_options = -I@DLB_INCLUDE@
-{@DLB_GATE@} linker_options = -L@DLB_LIB@
-{@DLB_GATE@,!(instrument|instrumentation|debug)} linker_options= -ldlb
-{@DLB_GATE@,!(instrument|instrumentation),debug} linker_options = -ldlb_dbg
-{@DLB_GATE@,(instrument|instrumentation),!debug} linker_options  = -ldlb_instr
-{@DLB_GATE@,(instrument|instrumentation),debug} linker_options  = -ldlb_instr_dbg
-{@DLB_GATE@} linker_options = -Xlinker @RPATH_PARAMETER@ -Xlinker @DLB_LIB@
-
-
+{@DLB_GATE@} linker_options = -L@DLB_LIB@  -ldlb  -Xlinker @RPATH_PARAMETER@ -Xlinker @DLB_LIB@
 
 
 
@@ -213,9 +208,4 @@ linker_options = -Wl,--enable-new-dtags
 
 # dlb
 {@DLB_GATE@} preprocessor_options = -I@DLB_INCLUDE@
-{@DLB_GATE@} linker_options = -L@DLB_LIB@
-{@DLB_GATE@,!(instrument|instrumentation|debug)} linker_options = -ldlb
-{@DLB_GATE@,!(instrument|instrumentation),debug} linker_options = -ldlb_dbg
-{@DLB_GATE@,(instrument|instrumentation),!debug} linker_options = -ldlb_instr
-{@DLB_GATE@,(instrument|instrumentation),debug} linker_options = -ldlb_instr_dbg
-{@DLB_GATE@} linker_options = -Xlinker @RPATH_PARAMETER@ -Xlinker @DLB_LIB@
+{@DLB_GATE@} linker_options = -L@DLB_LIB@ -ldlb -Xlinker @RPATH_PARAMETER@ -Xlinker @DLB_LIB@

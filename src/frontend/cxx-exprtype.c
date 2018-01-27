@@ -8164,7 +8164,7 @@ static void cxx_compute_name_from_entry_list(
         {
             *nodecl_output = nodecl_shallow_copy(nodecl_name);
             nodecl_set_symbol(*nodecl_output, entry);
-            nodecl_set_type(*nodecl_output, entry->type_information);
+            nodecl_set_type(*nodecl_output, get_unknown_dependent_type());
             nodecl_expr_set_is_type_dependent(*nodecl_output, 1);
             nodecl_expr_set_is_value_dependent(*nodecl_output, 1);
             return;
@@ -26433,7 +26433,7 @@ static const_value_t* evaluate_constexpr_constructor(
             // Evaluate it recursively
             nodecl_t nodecl_evaluated_expr = instantiate_expression(
                     nodecl_expr,
-                    nodecl_retrieve_context(nodecl_function_code),
+                    entry->decl_context,
                     symbol_entity_specs_get_instantiation_symbol_map(entry),
                     /* pack_index */ -1);
 
@@ -26498,7 +26498,7 @@ static const_value_t* evaluate_constexpr_constructor(
 
         nodecl_t nodecl_evaluated_expr = instantiate_expression(
                 nodecl_expr,
-                nodecl_retrieve_context(nodecl_function_code),
+                entry->decl_context,
                 symbol_entity_specs_get_instantiation_symbol_map(entry),
                 /* pack_index */ -1);
 
@@ -28485,7 +28485,9 @@ nodecl_t cxx_nodecl_make_function_call(
                         function_form, t,
                         locus);
 
-                if (!check_expr_flags.do_not_call_constexpr)
+                if (!check_expr_flags.do_not_call_constexpr
+                        // Skip the evaluation of the function call if any arg is value dependent
+                        && !any_arg_is_value_dependent)
                 {
                     if (symbol_entity_specs_get_is_constexpr(called_symbol))
                     {

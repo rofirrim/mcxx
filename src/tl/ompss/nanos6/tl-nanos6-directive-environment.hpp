@@ -65,7 +65,6 @@ namespace TL { namespace Nanos6 {
         /* -------- Data-Sharing information ------ */
         TL::ObjectList<TL::Symbol> shared;
         TL::ObjectList<TL::Symbol> private_;
-        TL::ObjectList<TL::Symbol> firstprivate;
         TL::ObjectList<TL::Symbol> captured_value; // Superset of firstprivate
         TL::ObjectList<ReductionItem> reduction;
 
@@ -102,6 +101,8 @@ namespace TL { namespace Nanos6 {
 
         private:
 
+        TL::ObjectList<TL::Symbol> _firstprivate;
+
         //! If a symbol has a SHARED and a REDUCTION data-sharing, this
         //! function removes the SHARED part from the directive-environment
         void remove_redundant_data_sharings();
@@ -122,6 +123,8 @@ namespace TL { namespace Nanos6 {
         void walk_type_for_saved_expressions(TL::Type t);
 
         bool symbol_has_data_sharing_attribute(TL::Symbol sym) const;
+
+        friend class FirstprivateSymbolsWithoutDataSharing;
     };
 
 } }

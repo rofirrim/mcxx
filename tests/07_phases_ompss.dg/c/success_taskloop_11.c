@@ -1,5 +1,5 @@
 /*--------------------------------------------------------------------
-  (C) Copyright 2006-2014 Barcelona Supercomputing Center
+  (C) Copyright 2006-2012 Barcelona Supercomputing Center
                           Centro Nacional de Supercomputacion
   
   This file is part of Mercurium C/C++ source-to-source compiler.
@@ -24,37 +24,22 @@
   Cambridge, MA 02139, USA.
 --------------------------------------------------------------------*/
 
-#ifndef TL_FINAL_STMTS_GENERATOR_HPP
-#define TL_FINAL_STMTS_GENERATOR_HPP
 
-#include "tl-nodecl-visitor.hpp"
-#include "tl-nodecl-utils.hpp"
 
-#include <map>
+/*
+<testinfo>
+test_generator=(config/mercurium-ompss "config/mercurium-ompss-2 openmp-compatibility")
+</testinfo>
+*/
+#include<assert.h>
 
-namespace TL {
-
-    class FinalStmtsGenerator : public Nodecl::ExhaustiveVisitor<void>
+int main()
+{
+    #pragma omp taskloop grainsize(1)
+    for (unsigned int x = -1u; x <= -1u; ++x)
     {
-        private:
-            bool _ompss_mode;
-            std::map<Nodecl::NodeclBase, Nodecl::NodeclBase> _final_stmts_map;
-            Nodecl::Utils::SimpleSymbolMap _function_translation_map;
-
-        public:
-            FinalStmtsGenerator(bool ompss_mode);
-
-            void visit(const Nodecl::OpenMP::Task& task);
-            void visit(const Nodecl::OmpSs::TaskCall& task_call);
-            void visit(const Nodecl::OpenMP::Taskloop& taskloop);
-            void visit(const Nodecl::OmpSs::TaskExpression& task_expr);
-            void visit(const Nodecl::OpenMP::For& for_construct);
-
-            std::map<Nodecl::NodeclBase, Nodecl::NodeclBase>& get_final_stmts();
-
-        private:
-            Nodecl::NodeclBase generate_final_stmts(Nodecl::NodeclBase original_stmts);
-    };
-
+        // Ignoring our current transformation of the taskloop construct,
+        // this code hangs. Having in mind our transformation, we do not
+        // execute any iteration of this loop :D
+    }
 }
-#endif // TL_FINAL_STMTS_GENERATOR_HPP

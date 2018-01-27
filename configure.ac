@@ -108,8 +108,8 @@ fi
 AC_SUBST([CC_FOR_BUILD])
 dnl --------------------- End Basic toolchain setup -----------------
 
-dnl --------------------- Check we are not using too old gcc compilers ----
 
+dnl --------------------- Check we are not using too old gcc compilers ----
 AC_MSG_CHECKING([whether gcc is new enough])
 AC_COMPILE_IFELSE(
    [AC_LANG_SOURCE([[
@@ -128,21 +128,24 @@ AC_COMPILE_IFELSE(
    [AC_MSG_RESULT([ok])],
    [AC_MSG_ERROR([too old compiler, gcc 4.1 or upper is requested])]
 )
-
 dnl --------------------- end check of old gcc ---
+
 
 INSTALL_CONFIG_FILES="00.config.plain"
 
-# Note that these profiles are just for testing, no soft link
-# is created for them
+# Our configuration file with utilities is always installed although it doesn't
+# generate any binary
+INSTALL_CONFIG_FILES="${INSTALL_CONFIG_FILES} 02.config.utilities"
+
+# Note that these profiles are just for testing, no soft link is created for them
 INSTALL_CONFIG_FILES="${INSTALL_CONFIG_FILES} 10.config.hlt"
 
 # plaincxx is always installed as a binary
 COMPILER_NAMES="plaincc plainfc plainf95"
 SCRIPT_COMPILER_NAMES=""
 
-dnl ----- SQLITE - Required only for fortran ---
 
+dnl ----- SQLITE - Required only for fortran ---
 PKG_PROG_PKG_CONFIG
 
 if test -z "$PKG_CONFIG";
@@ -169,8 +172,11 @@ AC_MSG_ERROR([Fortran support requires development files of sqlite3.
 
 AC_SUBST([sqlite3_CFLAGS])
 AC_SUBST([sqlite3_LIBS])
-
 dnl ----- End Sqlite ---------------------------
+
+
+AX_CHECK_CUDA
+
 
 dnl --- Suport for Extrae --------------
 extrae_support="no"
@@ -230,8 +236,8 @@ AC_SUBST([EXTRAE_LIB])
 AC_SUBST([EXTRAE_INCLUDE])
 
 AM_CONDITIONAL([EXTRAE_ENABLED], test x$extrae_support = xyes)
-
 dnl --- End of support for Extrae ------------
+
 
 dnl -- Fortran tests ---
 fortran_tests_enabled="yes"
@@ -261,6 +267,7 @@ AC_ARG_ENABLE([fortran-tests],
 FORTRAN_TESTS_ENABLED=$fortran_tests_enabled
 AC_SUBST([FORTRAN_TESTS_ENABLED])
 dnl -- End Fortran tests ---
+
 
 dnl -- New Fortran scanner ---
 fortran_new_scanner="yes"
@@ -295,8 +302,8 @@ then
 fi
 dnl -- End New Fortran scanner --
 
-dnl -- Extra compilers ---
 
+dnl -- Extra compilers ---
 disable_xlc=no
 AC_MSG_CHECKING([if support for IBM XL C/C++ was explicitly disabled])
 AC_ARG_ENABLE([xlc],
@@ -483,6 +490,7 @@ else
     XLF=
 fi
 
+
 dnl --------------------- Support for plain profiles for Intel Compilers -------------
 if test x"$ICC" != x -o x"$ICPC" != x -o x"$IFORT" != x;
 then
@@ -505,10 +513,7 @@ then
     fi
 fi
 dnl --------------------- End support for plain profiles for Intel Compilers ---------
-
 dnl -- End of extra compiler checks ---
-
-
 
 
 dnl --------------------- Support for OmpSs ------------------------------------------
@@ -534,6 +539,7 @@ AC_ARG_ENABLE([ompss],
        AC_MSG_RESULT([no])
     ]
 )
+dnl --------------------- End of Support for OmpSs ------------------------------------------
 
 
 dnl --------------------- Support for OpenMP --------------------------------------
@@ -566,6 +572,7 @@ AC_ARG_ENABLE([openmp],
     fi
   ]
 )
+dnl --------------------- End of Support for OpenMP --------------------------------------
 
 
 dnl --------------------- Support for OmpSs-2  --------------------------------------
@@ -592,10 +599,10 @@ AC_ARG_ENABLE([ompss-2],
      AC_MSG_RESULT([no])
   ]
 )
+dnl --------------------- End of Support for OmpSs-2  --------------------------------------
 
 
 dnl --------------------- Support for OmpSs / OpenMP Nanox --------------------------------------
-
 is_enabled_tl_omp_nanox="no"
 if test x$is_enabled_openmp = xyes -o x$is_enabled_ompss = xyes;
 then
@@ -878,64 +885,262 @@ AC_SUBST([NANOX_MIC])
 AC_SUBST([NANOX_MIC_LIBS])
 AC_SUBST([NANOX_MIC_INSTRUMENTATION])
 AC_SUBST([MIC_TOOLS])
+dnl --------------------- End of Support for OpenMP Nanox -------------------------------
 
-dnl SIMD Support
 
-AX_EXT
+dnl --------------------- Support for CUDA devices in Nanox --------------------------------
+AC_MSG_CHECKING([whether the CUDA Nanos++ Lowering is enabled])
+AC_ARG_ENABLE([nanox-cuda-device],
+  AS_HELP_STRING([--disable-nanox-cuda-device], [Disables the CUDA Nanos++ Lowering phase in Mercurium (enabled by default)]),
+  [ ], # enable_nanox_cuda_device=$enable_val
+  [ enable_nanox_cuda_device="yes" ])
+AC_MSG_RESULT([$enable_nanox_cuda_device])
 
-simd_version="no (SSE 4.1 or higher not detected)."
-simd_math_version="(SVML not enabled)"
-svml_enabled="no"
-simd_flags=
-simd_includes=
-nanox_avx2="no"
-nanox_sse="no"
 
-if test "$ax_cv_have_avx2_ext" = yes;
+nanox_supports_cuda=no
+if test x"$is_enabled_tl_omp_nanox" = x"yes";
 then
-  simd_version="AVX2"
-  simd_flags="-mavx2"
-  simd_includes="-mavx2 -include immintrin.h"
-  nanox_avx2="yes"
-  nanox_sse="yes"
-elif test "$ax_cv_have_sse42_ext" = yes;
-then
-  simd_version="SSE4.2"
-  simd_flags="-msse4.2"
-  simd_includes="-msse4.2 -include nmmintrin.h"
-  nanox_sse="yes"
-elif test "$ax_cv_have_sse41_ext" = yes;
-then
-  simd_version="SSE4.1"
-  simd_flags="-msse4.1"
-  simd_includes="-msse4.1 -include smmintrin.h"
-  nanox_sse="yes"
+    #backup vars before we do the test
+    CFLAGSBACKUP="$CFLAGS"
+    CPPFLAGSBACKUP="$CPPFLAGS"
+    CXXFLAGSBACKUP="$CXXFLAGS"
+
+    CFLAGS="$CFLAGS -I$nanox_include -I$CUDA_INCLUDES"
+    CPPFLAGS="$CPPFLAGS -I$nanox_include -I$CUDA_INCLUDES"
+    CXXFLAGS="$CXXFLAGS -I$nanox_include -I$CUDA_INCLUDES"
+
+    AC_CHECK_HEADER([nanos-gpu.h], [nanox_supports_cuda=yes])
+
+    CFLAGS="$CFLAGSBACKUP"
+    CPPFLAGS="$CPPFLAGSBACKUP"
+    CXXFLAGS="$CXXFLAGSBACKUP"
+    AC_MSG_CHECKING([whether Nanos++ was configured with CUDA support])
+    AC_MSG_RESULT([$nanox_supports_cuda])
 fi
 
-AC_ARG_WITH([svml],
-       AS_HELP_STRING([--with-svml=dir], [Directory of the SVML library]),
-       [
-        svml_enabled="yes"
-        svml_lib="${withval}"
-        simd_math_version="(SVML)"
-       ]
-)
+ompss_supports_cuda="no"
+if test x"$ax_cv_check_cuda" = x"yes" -a x"$enable_nanox_cuda_device" = x"yes" -a x"$nanox_supports_cuda" = x"yes";
+then
+    ompss_supports_cuda="yes"
+fi
 
-SIMD_FLAGS=$simd_flags
-AC_SUBST([SIMD_FLAGS])
 
-SIMD_INCLUDES=$simd_includes
-AC_SUBST([SIMD_INCLUDES])
+if test x"$ompss_supports_cuda" = x"yes";
+then
+   ENABLE_CUDA=":true:"
+   INSTALL_CONFIG_FILES="${INSTALL_CONFIG_FILES} 55.config.omp.nvidia"
+   COMPILER_NAMES="${COMPILER_NAMES} mnvfc mnvcc mnvcxx"
+else
+   ENABLE_CUDA=":false:"
+fi
+AM_CONDITIONAL([BUILD_NANOX_DEVICE_CUDA], test x"$ompss_supports_cuda" = x"yes")
 
-SVML_ENABLED=$svml_enabled
-AC_SUBST([SVML_ENABLED])
+AC_SUBST([ENABLE_CUDA])
+AC_SUBST([ompss_supports_cuda])
+dnl --------------------- End of Support for CUDA in Nanox --------------------------------
 
-NANOX_SSE=$nanox_sse
-AC_SUBST([NANOX_SSE])
 
-NANOX_AVX2=$nanox_avx2
-AC_SUBST([NANOX_AVX2])
-dnl --------------------- End of Support for OpenMP Nanox -------------------------------
+dnl --------------------- Support for FPGA in Nanox --------------------------------
+AC_MSG_CHECKING([whether the FPGA Nanos++ Lowering is enabled])
+AC_ARG_ENABLE([nanox-fpga-device],
+  AS_HELP_STRING([--disable-nanox-fpga-device], [Disables the FPGA Nanos++ Lowering phase in Mercurium (enabled by default)]),
+  [ ], #enable_nanox_fpga_device=$enableval
+  [ enable_nanox_fpga_device="yes"])
+AC_MSG_RESULT([$enable_nanox_fpga_device])
+
+FPGA_CC=""
+AC_ARG_WITH([fpga-cc],
+AS_HELP_STRING([--with-fpga-cc=comp], [Prefix for the fpga system cross compiler for arm]),
+	[
+		FPGA_CC="${withval}"
+	],
+	[
+		FPGA_CC="arm-linux-gnueabi-"
+	])
+
+AC_SUBST([FPGA_CC])
+
+if test x$is_enabled_tl_omp_nanox = xyes -a x"$enable_nanox_fpga_device" = x"yes";
+then
+    INSTALL_CONFIG_FILES="${INSTALL_CONFIG_FILES} 50.config.omp.fpga"
+    COMPILER_NAMES="${COMPILER_NAMES} fpgacc fpgacxx"
+fi
+AM_CONDITIONAL([BUILD_NANOX_DEVICE_FPGA], test x$is_enabled_tl_omp_nanox = xyes -a x"$enable_nanox_fpga_device" = x"yes")
+dnl --------------------- End of Support for FPGA in Nanox --------------------------------
+
+
+dnl --------------------- Start OpenCL support in Mercurium --------------------------------
+opencl_valid=no
+
+AC_MSG_CHECKING([whether the OpenCL Nanos++ Lowering is enabled])
+AC_ARG_ENABLE([nanox-opencl-device],
+  AS_HELP_STRING([--disable-nanox-opencl-device], [Disables the OpenCL Nanos++ Lowering phase in Mercurium (enabled by default)]),
+  [ ], # enable_nanox_opencl_device=$enableval
+  [ enable_nanox_opencl_device="yes" ])
+AC_MSG_RESULT($enable_nanox_opencl_device)
+
+
+if test x$"$enable_nanox_opencl_device" = x"yes";
+then
+   AC_MSG_CHECKING([if nanox has opencl header installed])
+   #tests if opencl headers are usable and correct
+   #backup vars before we do the tests
+   CFLAGSBACKUP="$CFLAGS"
+   CPPFLAGSBACKUP="$CPPFLAGS"
+   CXXFLAGSBACKUP="$CXXFLAGS"
+
+   CFLAGS="$CFLAGS -I$nanox_include"
+   CPPFLAGS="$CPPFLAGS -I$nanox_include"
+   CXXFLAGS="$CXXFLAGS -I$nanox_include"
+
+   AC_CHECK_HEADER([nanos-opencl.h], [opencl_valid=yes], [opencl_valid=no])
+
+   CFLAGS="$CFLAGSBACKUP"
+   CPPFLAGS="$CPPFLAGSBACKUP"
+   CXXFLAGS="$CXXFLAGSBACKUP"
+fi
+
+if test x$is_enabled_tl_omp_nanox = xyes -a x$opencl_valid = xyes; then
+    INSTALL_CONFIG_FILES="${INSTALL_CONFIG_FILES} 55.config.omp.ocl"
+    COMPILER_NAMES="${COMPILER_NAMES} oclmcc oclmcxx oclmfc"
+    ENABLE_OPENCL=":true:"
+else
+    ENABLE_OPENCL=":false:"
+fi
+
+AC_SUBST([opencl_valid])
+AC_SUBST([ENABLE_OPENCL])
+
+AM_CONDITIONAL([BUILD_NANOX_DEVICE_OPENCL], test x$is_enabled_tl_omp_nanox = xyes -a x$opencl_valid = xyes)
+dnl --------------------- End OpenCL support in Nanox --------------------------------
+
+
+dnl --------------------- Start MPI support in Mercurium --------------------------------
+AC_MSG_CHECKING([whether the MPI Nanos++ Lowering is enabled])
+AC_ARG_ENABLE([nanox-mpi-device],
+  AS_HELP_STRING([--disable-nanox-mpi-device], [Disables the MPI Nanos++ Lowering phase in Mercurium (enabled by default)]),
+  [ ], # enable_nanox_mpi_device=$enableval
+  [ enable_nanox_mpi_device="yes" ])
+AC_MSG_RESULT($enable_nanox_mpi_device)
+
+mpi_valid=no
+if test x"$enable_nanox_mpi_device" = x"yes";
+then
+    mpi_found=no
+    mpi_forced=no
+    MPIPATH=""
+
+    #check the directory and get the right compiler path and name
+    AC_ARG_WITH([mpi],
+                AS_HELP_STRING([--with-mpi=dir], [Directory of mpi installation]),
+                [
+                 MPIPATH="${withval}"
+                 mpi_forced=yes
+                 ],
+                 [
+                  AC_CHECK_PROG([MPIICC], [mpiicc], [mpiicc])
+                  MPIPATH=${MPIICC%mpiicc}
+                  if test x$MPIPATH = x; then
+                      AC_CHECK_PROG([MPICC], [mpicc], [mpicc])
+                      MPIPATH=${MPICC%mpicc}
+                  fi
+                  ]
+                 )
+
+    # First attempt: try to find Intel MPI wrappers
+    if test x$mpi_found = xno; then
+        MPI_CNAME=mpiicc
+        MPI_CXXNAME=mpiicpc
+        MPI_FORTNAME=mpiifort
+
+        # Checking the presence of these wrappers in $MPIPATH (???) and $MPIPATH/bin
+
+        if test -f $MPIPATH/$MPI_CNAME; then
+            mpi_found=yes
+            MPICC=$MPI_CNAME
+            MPICXX=$MPI_CXXNAME
+            MPIFORT=$MPI_FORTNAME
+        elif test -f $MPIPATH/bin/$MPI_CNAME; then
+            mpi_found=yes
+            MPICC=$MPI_CNAME
+            MPICXX=$MPI_CXXNAME
+            MPIFORT=$MPI_FORTNAME
+        fi
+    fi
+
+    # Second attempt: try to find generic MPI wrappers
+    if test x$mpi_found = xno; then
+        MPI_CNAME=mpicc
+        MPI_CXXNAME=mpicxx
+        MPI_FORTNAME=mpif90
+
+        # Checking the presence of these wrappers in $MPIPATH (???) and $MPIPATH/bin
+
+        if test -f $MPIPATH/$MPI_CNAME; then
+            mpi_found=yes
+            MPICC=$MPI_CNAME
+            MPICXX=$MPI_CXXNAME
+            MPIFORT=$MPI_FORTNAME
+        elif test -f  $MPIPATH/bin/$MPI_CNAME; then
+            mpi_found=yes
+            MPICC=$MPI_CNAME
+            MPICXX=$MPI_CXXNAME
+            MPIFORT=$MPI_FORTNAME
+        fi
+    fi
+
+    # Final attempt: best effort configuration
+    if test x$mpi_found = xno; then
+
+        # if the user specified a MPI version we should emit an error
+        if test x$mpi_forced = xyes; then
+            AC_MSG_ERROR([MPI Compiler not found in --with-mpi directory $MPIPATH or $MPIPATH/bin])
+        fi
+
+        #fill with dummy variables, the ones in user's PATH at compilation time will be used
+        mpi_found=yes
+        MPICC=mpicc
+        MPICXX=mpicxx
+        MPIFORT=mpif90
+    fi
+
+    if test x$mpi_found = xyes; then
+        AC_MSG_CHECKING([if nanox has mpi enabled])
+        #tests if mpi headers are usable and correct
+        #backup vars before we do the tests
+        CFLAGSBACKUP="$CFLAGS"
+        CPPFLAGSBACKUP="$CPPFLAGS"
+        CXXFLAGSBACKUP="$CXXFLAGS"
+
+        CFLAGS="$CFLAGS -D_NANOS_MPI_H_ -I$nanox_include"
+        CPPFLAGS="$CPPFLAGS -D_NANOS_MPI_H_ -I$nanox_include"
+        CXXFLAGS="$CXXFLAGS -D_NANOS_MPI_H_ -I$nanox_include"
+        AC_CHECK_HEADER([nanos-mpi.h], [mpi_valid=yes],[])
+
+        CFLAGS="$CFLAGSBACKUP"
+        CPPFLAGS="$CPPFLAGSBACKUP"
+        CXXFLAGS="$CXXFLAGSBACKUP"
+    fi
+fi
+
+if test x$mpi_valid = xyes;
+then
+    INSTALL_CONFIG_FILES="${INSTALL_CONFIG_FILES} 56.config.omp.mpi"
+    if test x"$ICC" != x -o x"$ICPC" != x -o x"$IFORT" != x;
+    then
+        INSTALL_CONFIG_FILES="${INSTALL_CONFIG_FILES} 56.config.omp.intel.mpi"
+    fi
+
+    SCRIPT_COMPILER_NAMES="${SCRIPT_COMPILER_NAMES} mpimcc mpimcxx mpimfc"
+fi
+
+AM_CONDITIONAL([BUILD_NANOX_DEVICE_MPI], test x$mpi_valid = xyes)
+
+AC_SUBST([MPICC])
+AC_SUBST([MIC_LIBS])
+AC_SUBST([MPICXX])
+AC_SUBST([MPIFORT])
+dnl --------------------- End MPI support in Mercurium --------------------------------
 
 
 dnl ---------------------- Support for OmpSs-2 Nanos6 -----------------------------------------
@@ -1093,6 +1298,7 @@ AC_SUBST([DLB_INCLUDE])
 AC_SUBST([DLB_LIB])
 dnl --------------------- End of Dynamic Load Balancing -------------------------------
 
+
 dnl --------------------- Support for GOMP ---------------------------------
 is_enabled_tl_omp_gomp="no"
 
@@ -1139,6 +1345,7 @@ AM_CONDITIONAL([BUILD_OMP_GOMP], test x$is_enabled_tl_omp_gomp = xyes)
 
 AC_SUBST([GOMP_OMP_LIB])
 dnl --------------------- End of Support for GOMP ---------------------------
+
 
 dnl --------------------- Support for Intel OpenMP RTL ---------------------------------
 is_enabled_tl_omp_intel=""
@@ -1219,377 +1426,8 @@ AC_SUBST([INTEL_OMP_INCLUDE], ${intel_omp_include})
 AC_SUBST([INTEL_OMP_LIB], ${intel_omp_lib})
 dnl --------------------- End of Support for Intel OpenMP RTL ---------------------------
 
-dnl --------------------- Support for CUDA devices in Nanox --------------------------------
-# Check if CUDA is installed
-cuda_valid=no
-cuda_enabled=yes
-CUDA=""
-
-AC_MSG_CHECKING([if the use of CUDA devices was disabled])
-AC_ARG_ENABLE([nanox-cuda-device],
-  AS_HELP_STRING([--disable-nanox-cuda-device], [Disables the support for CUDA devices]),
-  [
-    if test x"$enableval" = x"yes" -o x"$enableval" = x"";
-    then
-        cuda_enabled="yes"
-        AC_MSG_RESULT([no])
-    else if test x"$enableval" = x"no";
-         then
-            AC_MSG_RESULT([yes])
-            cuda_enabled="no"
-         else
-            AC_MSG_ERROR([This option can only be given 'yes' or 'no' values])
-         fi
-    fi
-  ],
-  [
-    cuda_enabled="yes"
-    AC_MSG_RESULT([no])
-  ]
-)
-
-CUDA_INCLUDES=""
-CUDA_LIBS=""
-
-AC_ARG_WITH([cuda],
-AS_HELP_STRING([--with-cuda=dir], [Directory of CUDA installation]),
-	[
-		CUDADIR="${withval}"
-	],
-	[
-		CUDADIR="/usr/local/cuda"
-	])
-
-
-if test x$cuda_enabled = xyes ; then
-    # Checking CUDA support consists on two steps:
-    #   1. Checking that we have access to a valid nvcc
-    #   2. Checking that the runtime was configured with CUDA support
-    if test -d "$CUDADIR" ;
-    then
-        AC_CHECK_PROG([NVCC], [nvcc], [nvcc], [], [$CUDADIR/bin$PATH_SEPARATOR$PATH])
-        if test x$NVCC = x ; then
-            AC_MSG_WARN([nvcc not found. Disabling CUDA support])
-            cuda_valid=no
-        else
-            CUDA_INCLUDES="$CUDADIR/include"
-            CUDA_LIBS="$CUDADIR/lib"
-            if test -d "$CUDADIR/lib64" ;
-            then
-                CUDA_LIBS="$CUDADIR/lib64"
-            fi
-
-            #backup vars before we do the test
-            CFLAGSBACKUP="$CFLAGS"
-            CPPFLAGSBACKUP="$CPPFLAGS"
-            CXXFLAGSBACKUP="$CXXFLAGS"
-
-            CFLAGS="$CFLAGS -I$nanox_include -I$CUDA_INCLUDES"
-            CPPFLAGS="$CPPFLAGS -I$nanox_include -I$CUDA_INCLUDES"
-            CXXFLAGS="$CXXFLAGS -I$nanox_include -I$CUDA_INCLUDES"
-
-            AC_CHECK_HEADER([nanos-gpu.h], [cuda_valid=yes],[cuda_valid=no])
-
-            CFLAGS="$CFLAGSBACKUP"
-            CPPFLAGS="$CPPFLAGSBACKUP"
-            CXXFLAGS="$CXXFLAGSBACKUP"
-        fi
-    else
-         AC_MSG_WARN([Directory "$CUDADIR" does not exist. Disabling CUDA Support])
-	     cuda_valid=no
-    fi
-fi
-
-CUDA_RPATH=""
-if test -n "$CUDA_LIBS";
-then
-  CUDA_RPATH="-Xlinker -rpath -Xlinker $CUDA_LIBS"
-fi
-
-AC_SUBST([CUDA_INCLUDES])
-AC_SUBST([CUDA_LIBS])
-AC_SUBST([CUDA_RPATH])
-
-if test x$is_enabled_tl_omp_nanox = xyes -a x$cuda_valid = xyes;
-then
-   ENABLE_CUDA=":true:"
-   INSTALL_CONFIG_FILES="${INSTALL_CONFIG_FILES} 55.config.omp.nvidia"
-   COMPILER_NAMES="${COMPILER_NAMES} mnvfc mnvcc mnvcxx"
-
-   AC_DEFINE_UNQUOTED([CUDA_DIR], ["$CUDADIR"], [CUDA installation path])
-else
-   ENABLE_CUDA=":false:"
-fi
-AM_CONDITIONAL([BUILD_NANOX_DEVICE_CUDA], test x$is_enabled_tl_omp_nanox = xyes -a x$cuda_valid = xyes)
-
-AC_SUBST([ENABLE_CUDA])
-AC_SUBST([cuda_valid])
-
-dnl --------------------- End of Support for CUDA in Nanox --------------------------------
-
-dnl --------------------- Support for FPGA in Nanox --------------------------------
-
-fpga_enabled=yes
-AC_MSG_CHECKING([if the use of FPGA devices was disabled])
-AC_ARG_ENABLE([nanox-fpga-device],
-  AS_HELP_STRING([--disable-nanox-fpga-device], [Disables the support for FPGA devices]),
-  [
-    if test x"$enableval" = x"yes" -o x"$enableval" = x"";
-    then
-        fpga_enabled="yes"
-        AC_MSG_RESULT([no])
-    else if test x"$enableval" = x"no";
-         then
-            AC_MSG_RESULT([yes])
-            fpga_enabled="no"
-         else
-            AC_MSG_ERROR([This option can only be given 'yes' or 'no' values])
-         fi
-    fi
-  ],
-  [
-    fpga_enabled="yes"
-    AC_MSG_RESULT([no])
-  ]
-)
-
-FPGA_CC=""
-AC_ARG_WITH([fpga-cc],
-AS_HELP_STRING([--with-fpga-cc=comp], [Prefix for the fpga system cross compiler for arm]),
-	[
-		FPGA_CC="${withval}"
-	],
-	[
-		FPGA_CC="arm-linux-gnueabi-"
-	])
-
-AC_SUBST([FPGA_CC])
-
-if test x$is_enabled_tl_omp_nanox = xyes -a x$fpga_enabled = xyes;
-then
-    INSTALL_CONFIG_FILES="${INSTALL_CONFIG_FILES} 50.config.omp.fpga"
-    COMPILER_NAMES="${COMPILER_NAMES} fpgacc fpgacxx"
-fi
-AM_CONDITIONAL([BUILD_NANOX_DEVICE_FPGA], test x$is_enabled_tl_omp_nanox = xyes -a x$fpga_enabled = xyes)
-
-dnl --------------------- End of Support for FPGA in Nanox --------------------------------
-
-dnl --------------------- Start OpenCL support in Mercurium --------------------------------
-
-opencl_enabled=yes
-opencl_valid=no
-
-AC_MSG_CHECKING([if the use of OpenCL devices was disabled])
-AC_ARG_ENABLE([nanox-opencl-device],
-  AS_HELP_STRING([--disable-nanox-opencl-device], [Disables the support for OpenCL devices]),
-  [
-    if test x"$enableval" = x"yes" -o x"$enableval" = x"";
-    then
-        opencl_enabled="yes"
-        opencl_valid="yes"
-        AC_MSG_RESULT([no])
-    else if test x"$enableval" = x"no";
-         then
-            AC_MSG_RESULT([yes])
-            opencl_enabled="no"
-         else
-            AC_MSG_ERROR([This option can only be given 'yes' or 'no' values])
-         fi
-    fi
-  ],
-  [
-    opencl_enabled="yes"
-    AC_MSG_RESULT([no])
-  ]
-)
-
-
-if test x$opencl_enabled = xyes -a x$opencl_valid = xno;
-then
-   AC_MSG_CHECKING([if nanox has opencl header installed])
-   #tests if opencl headers are usable and correct
-   #backup vars before we do the tests
-   CFLAGSBACKUP="$CFLAGS"
-   CPPFLAGSBACKUP="$CPPFLAGS"
-   CXXFLAGSBACKUP="$CXXFLAGS"
-
-   CFLAGS="$CFLAGS -I$nanox_include"
-   CPPFLAGS="$CPPFLAGS -I$nanox_include"
-   CXXFLAGS="$CXXFLAGS -I$nanox_include"
-
-   AC_CHECK_HEADER([nanos-opencl.h], [opencl_valid=yes], [opencl_valid=no])
-
-   CFLAGS="$CFLAGSBACKUP"
-   CPPFLAGS="$CPPFLAGSBACKUP"
-   CXXFLAGS="$CXXFLAGSBACKUP"
-fi
-
-if test x$is_enabled_tl_omp_nanox = xyes -a x$opencl_valid = xyes; then
-    INSTALL_CONFIG_FILES="${INSTALL_CONFIG_FILES} 55.config.omp.ocl"
-    COMPILER_NAMES="${COMPILER_NAMES} oclmcc oclmcxx oclmfc"
-    ENABLE_OPENCL=":true:"
-else
-    ENABLE_OPENCL=":false:"
-fi
-
-AC_SUBST([opencl_valid])
-AC_SUBST([ENABLE_OPENCL])
-
-AM_CONDITIONAL([BUILD_NANOX_DEVICE_OPENCL], test x$is_enabled_tl_omp_nanox = xyes -a x$opencl_valid = xyes)
-
-dnl --------------------- End OpenCL support in Nanox --------------------------------
-
-
-dnl --------------------- Start MPI support in Mercurium --------------------------------
-mpi_enabled=yes
-
-AC_MSG_CHECKING([if the use of MPI devices was disabled])
-AC_ARG_ENABLE([nanox-mpi-device],
-  AS_HELP_STRING([--disable-nanox-mpi-device], [Disables the support for MPI devices]),
-  [
-    if test x"$enableval" = x"yes" -o x"$enableval" = x"";
-    then
-        mpi_enabled="yes"
-        AC_MSG_RESULT([no])
-    else if test x"$enableval" = x"no";
-         then
-            AC_MSG_RESULT([yes])
-            mpi_enabled="no"
-         else
-            AC_MSG_ERROR([This option can only be given 'yes' or 'no' values])
-         fi
-    fi
-  ],
-  [
-    mpi_enabled="yes"
-    AC_MSG_RESULT([no])
-  ]
-)
-
-mpi_valid=no
-if test x$mpi_enabled = xyes;
-then
-    mpi_found=no
-    mpi_forced=no
-    MPIPATH=""
-
-    #check the directory and get the right compiler path and name
-    AC_ARG_WITH([mpi],
-                AS_HELP_STRING([--with-mpi=dir], [Directory of mpi installation]),
-                [
-                 MPIPATH="${withval}"
-                 mpi_forced=yes
-                 ],
-                 [
-                  AC_CHECK_PROG([MPIICC], [mpiicc], [mpiicc])
-                  MPIPATH=${MPIICC%mpiicc}
-                  if test x$MPIPATH = x; then
-                      AC_CHECK_PROG([MPICC], [mpicc], [mpicc])
-                      MPIPATH=${MPICC%mpicc}
-                  fi
-                  ]
-                 )
-
-    # First attempt: try to find Intel MPI wrappers
-    if test x$mpi_found = xno; then
-        MPI_CNAME=mpiicc
-        MPI_CXXNAME=mpiicpc
-        MPI_FORTNAME=mpiifort
-
-        # Checking the presence of these wrappers in $MPIPATH (???) and $MPIPATH/bin
-
-        if test -f $MPIPATH/$MPI_CNAME; then
-            mpi_found=yes
-            MPICC=$MPI_CNAME
-            MPICXX=$MPI_CXXNAME
-            MPIFORT=$MPI_FORTNAME
-        elif test -f $MPIPATH/bin/$MPI_CNAME; then
-            mpi_found=yes
-            MPICC=$MPI_CNAME
-            MPICXX=$MPI_CXXNAME
-            MPIFORT=$MPI_FORTNAME
-        fi
-    fi
-
-    # Second attempt: try to find generic MPI wrappers
-    if test x$mpi_found = xno; then
-        MPI_CNAME=mpicc
-        MPI_CXXNAME=mpicxx
-        MPI_FORTNAME=mpif90
-
-        # Checking the presence of these wrappers in $MPIPATH (???) and $MPIPATH/bin
-
-        if test -f $MPIPATH/$MPI_CNAME; then
-            mpi_found=yes
-            MPICC=$MPI_CNAME
-            MPICXX=$MPI_CXXNAME
-            MPIFORT=$MPI_FORTNAME
-        elif test -f  $MPIPATH/bin/$MPI_CNAME; then
-            mpi_found=yes
-            MPICC=$MPI_CNAME
-            MPICXX=$MPI_CXXNAME
-            MPIFORT=$MPI_FORTNAME
-        fi
-    fi
-
-    # Final attempt: best effort configuration
-    if test x$mpi_found = xno; then
-
-        # if the user specified a MPI version we should emit an error
-        if test x$mpi_forced = xyes; then
-            AC_MSG_ERROR([MPI Compiler not found in --with-mpi directory $MPIPATH or $MPIPATH/bin])
-        fi
-
-        #fill with dummy variables, the ones in user's PATH at compilation time will be used
-        mpi_found=yes
-        MPICC=mpicc
-        MPICXX=mpicxx
-        MPIFORT=mpif90
-    fi
-
-    if test x$mpi_found = xyes; then
-        AC_MSG_CHECKING([if nanox has mpi enabled])
-        #tests if mpi headers are usable and correct
-        #backup vars before we do the tests
-        CFLAGSBACKUP="$CFLAGS"
-        CPPFLAGSBACKUP="$CPPFLAGS"
-        CXXFLAGSBACKUP="$CXXFLAGS"
-
-        CFLAGS="$CFLAGS -D_NANOS_MPI_H_ -I$nanox_include"
-        CPPFLAGS="$CPPFLAGS -D_NANOS_MPI_H_ -I$nanox_include"
-        CXXFLAGS="$CXXFLAGS -D_NANOS_MPI_H_ -I$nanox_include"
-        AC_CHECK_HEADER([nanos-mpi.h], [mpi_valid=yes],[])
-
-        CFLAGS="$CFLAGSBACKUP"
-        CPPFLAGS="$CPPFLAGSBACKUP"
-        CXXFLAGS="$CXXFLAGSBACKUP"
-    fi
-fi
-
-if test x$mpi_valid = xyes;
-then
-    INSTALL_CONFIG_FILES="${INSTALL_CONFIG_FILES} 56.config.omp.mpi"
-    if test x"$ICC" != x -o x"$ICPC" != x -o x"$IFORT" != x;
-    then
-        INSTALL_CONFIG_FILES="${INSTALL_CONFIG_FILES} 56.config.omp.intel.mpi"
-    fi
-
-    SCRIPT_COMPILER_NAMES="${SCRIPT_COMPILER_NAMES} mpimcc mpimcxx mpimfc"
-fi
-
-AM_CONDITIONAL([BUILD_NANOX_DEVICE_MPI], test x$mpi_valid = xyes)
-
-AC_SUBST([MPICC])
-AC_SUBST([MIC_LIBS])
-AC_SUBST([MPICXX])
-AC_SUBST([MPIFORT])
-
-dnl --------------------- End MPI support in Mercurium --------------------------------
-
-
 
 dnl --------------------- OpenMP profile mode ---------------------
-
 is_enabled_tl_omp_profile="no"
 
 AC_MSG_CHECKING([if enabled OpenMP profile mode])
@@ -1614,11 +1452,10 @@ AC_ARG_ENABLE([tl-openmp-profile],
     is_enabled_tl_omp_profile="no"
   ]
 )
+dnl --------------------- end of OpenMP profile mode ---------------------
 
 
 dnl --------------------- Shared between Nanox and Nanos6 ------------------
-
-dnl -- Nanox and Nanos6
 if test x$is_enabled_tl_omp_nanox = xyes \
       -o x$is_enabled_tl_omp_profile = xyes \
       -o x$is_enabled_tl_ompss_nanos6 = xyes;
@@ -1685,6 +1522,65 @@ AC_SUBST([MIC_TESTING_DEVICE])
 dnl --------------------- End of shared between Nanox and Nanos6 ------------------
 
 
+dnl --------------------- Support for SIMD -------------------------------
+AX_EXT
+
+simd_version="no (SSE 4.1 or higher not detected)."
+simd_math_version="(SVML not enabled)"
+svml_enabled="no"
+simd_flags=
+simd_includes=
+nanox_avx2="no"
+nanox_sse="no"
+
+if test "$ax_cv_have_avx2_ext" = yes;
+then
+  simd_version="AVX2"
+  simd_flags="-mavx2"
+  simd_includes="-mavx2 -include immintrin.h"
+  nanox_avx2="yes"
+  nanox_sse="yes"
+elif test "$ax_cv_have_sse42_ext" = yes;
+then
+  simd_version="SSE4.2"
+  simd_flags="-msse4.2"
+  simd_includes="-msse4.2 -include nmmintrin.h"
+  nanox_sse="yes"
+elif test "$ax_cv_have_sse41_ext" = yes;
+then
+  simd_version="SSE4.1"
+  simd_flags="-msse4.1"
+  simd_includes="-msse4.1 -include smmintrin.h"
+  nanox_sse="yes"
+fi
+
+AC_ARG_WITH([svml],
+       AS_HELP_STRING([--with-svml=dir], [Directory of the SVML library]),
+       [
+        svml_enabled="yes"
+        svml_lib="${withval}"
+        simd_math_version="(SVML)"
+       ]
+)
+
+SIMD_FLAGS=$simd_flags
+AC_SUBST([SIMD_FLAGS])
+
+SIMD_INCLUDES=$simd_includes
+AC_SUBST([SIMD_INCLUDES])
+
+SVML_ENABLED=$svml_enabled
+AC_SUBST([SVML_ENABLED])
+
+NANOX_SSE=$nanox_sse
+AC_SUBST([NANOX_SSE])
+
+NANOX_AVX2=$nanox_avx2
+AC_SUBST([NANOX_AVX2])
+dnl --------------------- End of Support for SIMD -------------------------------
+
+
+dnl --------------------- Support for installation of binaries in pgkdir -------------------------------
 is_enabled_pkgdir_install="no"
 
 AC_MSG_CHECKING([if binaries should be installed in pkgdir])
@@ -1711,8 +1607,8 @@ AC_ARG_ENABLE([pkgdir-install],
   ]
 )
 AM_CONDITIONAL([ENABLE_PKGLIB_INSTALL], test x"$is_enabled_pkgdir_install" = x"yes")
+dnl --------------------- End Support for installation of binaries in pkgdir ---------------------
 
-dnl --------------------- End of Installation of binaries in pkgdir ---------------------
 
 dnl ---------------------- TL examples ----------------------------
 is_enabled_tl_examples="no"
@@ -1737,12 +1633,10 @@ AC_ARG_ENABLE([tl-examples],
 )
 
 AM_CONDITIONAL([BUILD_TL_EXAMPLES], test x$is_enabled_tl_examples = xyes)
-
-dnl ------------------------------------
+dnl ---------------------- End of TL examples ----------------------------
 
 
 dnl ---------------------- TL Analysis ----------------------------
-
 is_enabled_analysis="yes"
 AC_MSG_CHECKING([if Analysis phase is enabled])
 AC_ARG_ENABLE([analysis],
@@ -1793,7 +1687,8 @@ fi
 
 AC_SUBST([CORRECTNESS_LOG_DIR])
 AC_SUBST([ANALYSIS_ENABLED], $is_enabled_analysis)
-dnl ------------------------------------
+dnl ---------------------- End of TL Analysis ----------------------------
+
 
 dnl ---------------------- TL Vectorization ----------------------------
 is_enabled_vectorization="no"
@@ -1839,7 +1734,7 @@ fi
 AM_CONDITIONAL([BUILD_VECTORIZATION], [test x$is_enabled_vectorization = xyes])
 
 AC_SUBST([VECTORIZATION_ENABLED], $is_enabled_vectorization)
-dnl ------------------------------------
+dnl ---------------------- End of TL Vectorization ----------------------------
 
 dnl --------------------- Fortran LLVM codegen --------------------------------
 is_enabled_fortran_llvm_codegen="no"
@@ -1911,8 +1806,8 @@ AM_CONDITIONAL([BUILD_FORTRAN_LLVM_CODEGEN], test x$is_enabled_fortran_llvm_code
 
 dnl ---------------------
 
-dnl --------------------- Regeneration files ---------------------
 
+dnl --------------------- Regeneration files ---------------------
 enable_regeneration=yes
 dnl Enable bundled regex
 AC_ARG_ENABLE([file-regeneration],
@@ -2144,11 +2039,10 @@ AM_CONDITIONAL([TPP_BUILDING], test "(" x$bison_good = xyes ")" -o "(" x$flex_go
 AM_CONDITIONAL([BISON_BUILDING], test x$bison_good = xyes)
 AM_CONDITIONAL([FLEX_BUILDING], test x$flex_good = xyes)
 AM_CONDITIONAL([GPERF_BUILDING], test x$gperf_good = xyes)
-
 dnl --------------------- End of Regeneration files ---------------------
 
-dnl --------------------- Type environments -----------------------------
 
+dnl --------------------- Type environments -----------------------------
 default_type_environ=""
 AC_MSG_CHECKING([default typing environment])
 
@@ -2224,11 +2118,10 @@ else
 fi
 
 AC_DEFINE_UNQUOTED([DEFAULT_TYPE_ENVIRONMENT], ["$default_type_environ"], [Default type environment])
-
 dnl --------------------- End of type environments ----------------------
 
-dnl --------------------- Test for Win32 -------------------------
 
+dnl --------------------- Test for Win32 -------------------------
 AC_MSG_CHECKING([if environment is Win32])
 
 WIN32_NO_UNDEFINED=""
@@ -2251,8 +2144,8 @@ esac
 
 AC_SUBST([WIN32_NO_UNDEFINED])
 AM_CONDITIONAL([WINDOWS_BUILD], test x$windows_build = xyes)
-
 dnl ---------------------- End of test for Win32
+
 
 dnl --------------------- Debian release ----------------------
 AC_CHECK_PROG([DEB_RELEASE], [lsb_release], [$(lsb_release -sc)], [])
@@ -2696,7 +2589,7 @@ echo ""
 echo " * Devices testing:"
 echo ""
 echo "   MPI testing enabled:" $mpi_valid
-echo "   CUDA testing enabled:" $cuda_valid
+echo "   CUDA testing enabled:" $ompss_supports_cuda
 echo "   OpenCL testing enabled:" $opencl_valid
 echo ""
 echo " * OpenMP static profile mode: " $is_enabled_tl_omp_profile
