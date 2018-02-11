@@ -736,6 +736,121 @@ static void build_scope_program_unit_internal(
     }
 }
 
+typedef
+struct delayed_initialization_tag
+{
+    scope_entry_t* entry;
+    AST initialization;
+    const decl_context_t *decl_context;
+    char is_pointer_init;
+    char adjust_assumed_character_length;
+    char is_parameter;
+    char is_variable;
+} delayed_initialization_t;
+
+static void delay_check_initialization(void *info,
+                                       UNUSED_PARAMETER nodecl_t *nodecl_output)
+{
+    delayed_initialization_t *delayed_info = (delayed_initialization_t *)info;
+
+    nodecl_t nodecl_init = nodecl_null();
+    fortran_check_initialization(delayed_info->entry,
+                                 delayed_info->initialization,
+                                 delayed_info->decl_context,
+                                 delayed_info->is_pointer_init,
+                                 &nodecl_init);
+
+    if (!nodecl_is_err_expr(nodecl_init))
+    {
+        delayed_info->entry->value = nodecl_init;
+
+        if (delayed_info->adjust_assumed_character_length
+            && fortran_is_character_type(delayed_info->entry->type_information)
+            && array_type_is_unknown_size(delayed_info->entry->type_information)
+            && !nodecl_is_null(nodecl_init)
+            && !nodecl_is_err_expr(nodecl_init)
+            && nodecl_is_constant(nodecl_init)
+            && const_value_is_string(nodecl_get_constant(nodecl_init)))
+        {
+            // Update CHARACTER(LEN=*) to its real length
+            int num_elements = const_value_get_num_elements(
+                nodecl_get_constant(nodecl_init));
+
+            delayed_info->entry->type_information = get_array_type_bounds(
+                array_type_get_element_type(
+                    delayed_info->entry->type_information),
+                nodecl_make_integer_literal(
+                    get_signed_int_type(),
+                    const_value_get_one(fortran_get_default_integer_type_kind(),
+                                        1),
+                    ast_get_locus(delayed_info->initialization)),
+                nodecl_make_integer_literal(
+                    get_signed_int_type(),
+                    const_value_get_integer(
+                        num_elements,
+                        fortran_get_default_integer_type_kind(),
+                        1),
+                    ast_get_locus(delayed_info->initialization)),
+                delayed_info->decl_context);
+        }
+
+        if (delayed_info->is_variable)
+        {
+            symbol_entity_specs_set_is_static(delayed_info->entry, 1);
+        }
+        else if (delayed_info->is_parameter)
+        {
+            delayed_info->entry->type_information = get_const_qualified_type(
+                delayed_info->entry->type_information);
+        }
+    }
+
+    DELETE(delayed_info);
+}
+
+static void fortran_delay_check_initialization(scope_entry_t* entry,
+        AST initialization,
+        const decl_context_t* decl_context,
+        char is_pointer_init,
+        char adjust_assumed_character_length,
+        char is_parameter,
+        char is_variable)
+{
+    delayed_initialization_t *data = NEW(delayed_initialization_t);
+    data->entry = entry;
+    data->initialization = initialization;
+    data->decl_context = decl_context;
+    data->is_pointer_init = is_pointer_init;
+    data->adjust_assumed_character_length = adjust_assumed_character_length;
+    data->is_parameter = is_parameter;
+    data->is_variable = is_variable;
+
+    build_scope_delay_list_add(
+            DELAY_AFTER_DECLARATIONS,
+            delay_check_initialization,
+            data);
+
+}
+
+static void fortran_immediate_check_initialization(scope_entry_t* entry,
+        AST initialization,
+        const decl_context_t* decl_context,
+        char is_pointer_init,
+        char adjust_assumed_character_length,
+        char is_parameter,
+        char is_variable)
+{
+    delayed_initialization_t *data = NEW(delayed_initialization_t);
+    data->entry = entry;
+    data->initialization = initialization;
+    data->decl_context = decl_context;
+    data->is_pointer_init = is_pointer_init;
+    data->adjust_assumed_character_length = adjust_assumed_character_length;
+    data->is_parameter = is_parameter;
+    data->is_variable = is_variable;
+
+    delay_check_initialization(data, NULL);
+}
 
 typedef
 struct delayed_character_length_tag
@@ -6236,17 +6351,20 @@ static void build_scope_derived_type_data_component_def(
         if (initialization != NULL)
         {
             entry->kind = SK_VARIABLE;
-            nodecl_t nodecl_init = nodecl_null();
 
             if (ASTKind(initialization) == AST_POINTER_INITIALIZATION
                 && current_attr_spec.is_pointer)
             {
                 initialization = ASTSon0(initialization);
-                fortran_check_initialization(entry,
-                                             initialization,
-                                             decl_context,
-                                             /* is_pointer_init */ 1,
-                                             &nodecl_init);
+
+                fortran_delay_check_initialization(
+                    entry,
+                    initialization,
+                    decl_context,
+                    /* is_pointer_init */ 1,
+                    /* adjust_assumed_character_length */ 0,
+                    /* is_parameter */ 0,
+                    /* is_variable */ 0);
             }
             else if (current_attr_spec.is_pointer)
             {
@@ -6262,15 +6380,14 @@ static void build_scope_derived_type_data_component_def(
             }
             else
             {
-                fortran_check_initialization(entry,
-                                             initialization,
-                                             decl_context,
-                                             /* is_pointer_init */ 0,
-                                             &nodecl_init);
-            }
-            if (!nodecl_is_err_expr(nodecl_init))
-            {
-                entry->value = nodecl_init;
+                fortran_delay_check_initialization(
+                    entry,
+                    initialization,
+                    decl_context,
+                    /* is_pointer_init */ 0,
+                    /* adjust_assumed_character_length */ 0,
+                    /* is_parameter */ 0,
+                    /* is_variable */ 0);
             }
         }
 
@@ -7965,7 +8082,7 @@ static void build_scope_intrinsic_stmt(AST a,
                 // We have seen an EXTERNAL statement before for the same symbol
                 else
                 {
-                    error_printf_at(ast_get_locus(name), "entity '%s' already has EXTERNAL attribute and EXTERNAL attribute conflicts with EXTERNAL attribute\n",
+                    error_printf_at(ast_get_locus(name), "entity '%s' already has EXTERNAL attribute and EXTERNAL attribute conflicts with INTRINSIC attribute\n",
                             entry->symbol_name);
 
                     continue;
@@ -8208,34 +8325,14 @@ static void build_scope_parameter_stmt(AST a, const decl_context_t* decl_context
                 /* nodecl_output */ NULL);
         }
 
-        nodecl_t nodecl_init = nodecl_null();
-        fortran_check_initialization(entry, constant_expr, decl_context, /* is_pointer_init */ 0,
-                &nodecl_init);
-
-        if (fortran_is_character_type(no_ref(entry->type_information))
-                && array_type_is_unknown_size(no_ref(entry->type_information))
-                && !nodecl_is_null(nodecl_init)
-                && !nodecl_is_err_expr(nodecl_init)
-                && nodecl_is_constant(nodecl_init)
-                && const_value_is_string(nodecl_get_constant(nodecl_init)))
-        {
-            // Update CHARACTER(LEN=*) to its real length
-            int num_elements = const_value_get_num_elements(nodecl_get_constant(nodecl_init));
-
-            entry->type_information = 
-                get_array_type_bounds(
-                        array_type_get_element_type(entry->type_information),
-                        nodecl_make_integer_literal(get_signed_int_type(), 
-                            const_value_get_one(fortran_get_default_integer_type_kind(), 1),
-                            ast_get_locus(constant_expr)),
-                        nodecl_make_integer_literal(get_signed_int_type(), 
-                            const_value_get_integer(num_elements, fortran_get_default_integer_type_kind(), 1),
-                            ast_get_locus(constant_expr)),
-                        decl_context);
-        }
-
-        entry->type_information = get_const_qualified_type(entry->type_information);
-        entry->value = nodecl_init;
+        fortran_immediate_check_initialization(
+            entry,
+            constant_expr,
+            decl_context,
+            /* is_pointer_init */ 0,
+            /* adjust_assumed_character_length */ 1,
+            /* is_parameter */ 1,
+            /* is_variable */ 0);
     }
 }
 
@@ -8712,15 +8809,14 @@ static void build_scope_procedure_decl_stmt(AST a, const decl_context_t* decl_co
                         "only procedure pointers can be initialized in a procedure declaration statement\n");
             }
 
-            // The symbol has to be marked with the SAVE attribute if the initializer is present
-            symbol_entity_specs_set_is_static(entry, 1);
-
-            nodecl_t nodecl_init = nodecl_null();
-            fortran_check_initialization(entry, init, decl_context, /* is_pointer_init */ 1, &nodecl_init);
-            if (!nodecl_is_err_expr(nodecl_init))
-            {
-                entry->value = nodecl_init;
-            }
+            fortran_delay_check_initialization(
+                entry,
+                init,
+                decl_context,
+                /* is_pointer_init */ 1,
+                /* adjust_assumed_character_length */ 0,
+                /* is_parameter */ 0,
+                /* is_variable */ 1);
         }
     }
 }
@@ -9463,64 +9559,51 @@ static void build_scope_declaration_common_stmt(AST a, const decl_context_t* dec
         if (initialization != NULL)
         {
             entry->kind = SK_VARIABLE;
-            nodecl_t nodecl_init = nodecl_null();
 
             if (ASTKind(initialization) == AST_POINTER_INITIALIZATION
                     && is_pointer_type(no_ref(entry->type_information)))
             {
                 initialization = ASTSon0(initialization);
-                fortran_check_initialization(entry, initialization, decl_context, 
-                        /* is_pointer_init */ 1,
-                        &nodecl_init);
+                fortran_delay_check_initialization(
+                    entry,
+                    initialization,
+                    decl_context,
+                    /* is_pointer_init */ 1,
+                    /* adjust_assumed_character_length */ 0,
+                    /* is_parameter */ 0,
+                    /* is_variable */ 1);
             }
             else if (is_pointer_type(no_ref(entry->type_information)))
             {
                 error_printf_at(ast_get_locus(initialization), "a POINTER must be initialized using pointer initialization\n");
-                nodecl_init = nodecl_make_err_expr(ast_get_locus(initialization));
             }
             else if (ASTKind(initialization) == AST_POINTER_INITIALIZATION)
             {
                 error_printf_at(ast_get_locus(initialization), "no POINTER attribute, required for pointer initialization\n");
-                nodecl_init = nodecl_make_err_expr(ast_get_locus(initialization));
             }
             else
             {
-                fortran_check_initialization(entry, initialization, decl_context,
+                if (current_attr_spec.is_constant)
+                {
+                    fortran_immediate_check_initialization(
+                        entry,
+                        initialization,
+                        decl_context,
                         /* is_pointer_init */ 0,
-                        &nodecl_init);
-
-                if (fortran_is_character_type(entry->type_information)
-                        && array_type_is_unknown_size(entry->type_information)
-                        && !nodecl_is_null(nodecl_init)
-                        && !nodecl_is_err_expr(nodecl_init)
-                        && nodecl_is_constant(nodecl_init)
-                        && const_value_is_string(nodecl_get_constant(nodecl_init)))
-                {
-                    // Update CHARACTER(LEN=*) to its real length
-                    int num_elements = const_value_get_num_elements(nodecl_get_constant(nodecl_init));
-
-                    entry->type_information =
-                        get_array_type_bounds(
-                                array_type_get_element_type(entry->type_information),
-                                nodecl_make_integer_literal(get_signed_int_type(),
-                                    const_value_get_one(fortran_get_default_integer_type_kind(), 1),
-                                    ast_get_locus(initialization)),
-                                nodecl_make_integer_literal(get_signed_int_type(),
-                                    const_value_get_integer(num_elements, fortran_get_default_integer_type_kind(), 1),
-                                    ast_get_locus(initialization)),
-                                decl_context);
-                }
-            }
-            if (!nodecl_is_err_expr(nodecl_init))
-            {
-                entry->value = nodecl_init;
-                if (!current_attr_spec.is_constant)
-                {
-                    symbol_entity_specs_set_is_static(entry, 1);
+                        /* adjust_assumed_character_length */ 1,
+                        /* is_parameter */ current_attr_spec.is_constant,
+                        /* is_variable */ !current_attr_spec.is_constant);
                 }
                 else
                 {
-                    entry->type_information = get_const_qualified_type(entry->type_information);
+                    fortran_delay_check_initialization(
+                        entry,
+                        initialization,
+                        decl_context,
+                        /* is_pointer_init */ 0,
+                        /* adjust_assumed_character_length */ 1,
+                        /* is_parameter */ current_attr_spec.is_constant,
+                        /* is_variable */ !current_attr_spec.is_constant);
                 }
             }
         }

@@ -67,48 +67,10 @@ char fortran_check_expression(AST a, const decl_context_t* decl_context, nodecl_
     return !nodecl_is_err_expr(*nodecl_output);
 }
 
-static int _checking_initializer = 0;
-static void fortran_push_checking_initializer(void)
-{
-    _checking_initializer++;
-}
-
-static void fortran_pop_checking_initializer(void)
-{
-    _checking_initializer--;
-    ERROR_CONDITION(_checking_initializer < 0, 
-            "Invalid value %d for _checking_initializer", _checking_initializer);
-}
-
-static char fortran_checking_initializer(void)
-{
-    return _checking_initializer != 0;
-}
-
-static int _checking_array_expression = 0;
-static void fortran_push_checking_array_expression(void)
-{
-    _checking_array_expression++;
-}
-
-static void fortran_pop_checking_array_expression(void)
-{
-    _checking_array_expression--;
-    ERROR_CONDITION(_checking_array_expression < 0, 
-            "Invalid value %d for _checking_array_expression", _checking_array_expression);
-}
-
-static char fortran_checking_array_expression(void)
-{
-    return _checking_array_expression != 0;
-}
-
 char fortran_check_array_bounds_expression(AST a, const decl_context_t* decl_context, nodecl_t* nodecl_output)
 {
-    fortran_push_checking_array_expression();
     fortran_check_expression_impl_(a, decl_context, nodecl_output);
     *nodecl_output = fortran_expression_as_value(*nodecl_output);
-    fortran_pop_checking_array_expression();
 
     return !nodecl_is_err_expr(*nodecl_output);
 }
@@ -4119,44 +4081,36 @@ static void check_symbol_of_called_name(AST sym,
         // We did not find anything.
         //
         // Does this name match the name of an INTRINSIC?
-        scope_entry_t* entry = fortran_query_intrinsic_name_str(decl_context, ASTText(sym));
-        if (entry != NULL)
+        scope_entry_t* entry_intrinsic = fortran_query_intrinsic_name_str(decl_context, ASTText(sym));
+        if (entry_intrinsic != NULL)
         {
             // It names an intrinsic
             entry_is_an_intrinsic = 1;
 
             // Make sure this intrinsic can be invoked as we intend to do
-            if (is_call_stmt != symbol_entity_specs_get_is_intrinsic_subroutine(entry)
-                    && (!is_call_stmt) != symbol_entity_specs_get_is_intrinsic_function(entry))
+            if (is_call_stmt != symbol_entity_specs_get_is_intrinsic_subroutine(entry_intrinsic)
+                    && (!is_call_stmt) != symbol_entity_specs_get_is_intrinsic_function(entry_intrinsic))
             {
                 entry_is_an_intrinsic = 0;
-                entry = NULL;
             }
 
             if (entry_is_an_intrinsic)
             {
-                if (!fortran_checking_initializer())
+                // Create a clone for the intrinsic.
+                const decl_context_t* program_unit_context = decl_context->current_scope->related_entry->related_decl_context;
+                scope_entry_t *entry = new_fortran_symbol(program_unit_context, ASTText(sym));
+                entry->locus = ast_get_locus(sym);
+
+                copy_intrinsic_function_info(entry, entry_intrinsic);
+
+                if (program_unit_context->current_scope->related_entry->kind == SK_MODULE)
                 {
-                    // Inserting the intrinsic as an alias is okay here since there
-                    // is no doubt about the name being the INTRINSIC symbol
-                    //
-                    // We do not insert intrinsics from initializations just in case
-                    // an INTRINSIC or EXTERNAL statement appears later
-                    insert_alias(decl_context->current_scope, entry, strtolower(ASTText(sym)));
-                }
-                else
-                {
-                    // if (decl_context->current_scope->related_entry != NULL
-                    //         && decl_context->current_scope->related_entry->kind == SK_MODULE)
-                    // {
-                    //         warn_printf("%s: warning: procedure reference to intrinsic '%s' has been stablished "
-                    //                 "to unspecified at this module scoping unit\n", ast_location(sym), entry->symbol_name);
-                    //         info_printf("%s: info: you may want to add an INTRINSIC or EXTERNAL statement prior to this use "
-                    //                 "to avoid lookup problems later when using name '%s'\n", ast_location(sym), entry->symbol_name);
-                    // }
+                    // Make this intrinsic a member of this module.
+                    scope_entry_t *module = decl_context->current_scope->related_entry;
+                    symbol_entity_specs_add_related_symbols(module, entry);
                 }
 
-                // We are done, this is the single name being called
+                // And we are done
                 *call_list = entry_list_new(entry);
                 return;
             }
@@ -4167,6 +4121,8 @@ static void check_symbol_of_called_name(AST sym,
             // Well, it does not name an intrinsic either (_or_ it does name
             // one but it does not match its usage) (i.e. CALLing an INTRINSIC
             // FUNCTION)
+
+            scope_entry_t *entry = NULL;
             if (is_call_stmt)
             {
                 // We did not find the symbol. But this is okay since this is a CALL.
@@ -4355,57 +4311,10 @@ static void check_symbol_name_as_a_variable(
             && symbol_entity_specs_get_is_implicit_basic_type(entry)
             && is_implicit_none(decl_context))
     {
-        if (symbol_is_parameter_of_function(entry, 
-                    decl_context->current_scope->related_entry)
-                && fortran_checking_array_expression())
-        {
-            // Special case for this (incorrect but tolerated) case
-            //
-            // SUBROUTINE S(A, N)
-            //    IMPLICIT NONE
-            //
-            //    INTEGER :: A(N+1)
-            //    INTEGER :: N
-            //    ...
-
-            // We currently do not have any mean to remember that the usage of this
-            // variable involves some information for it. What we can do, though
-            // is set it a type and mark it as implicitly defined (even though we are under
-            // IMPLICIT NONE)
-            entry->type_information = get_lvalue_reference_type(fortran_get_default_integer_type());
-            symbol_entity_specs_set_is_implicit_basic_type(entry, 1);
-
-            // Being unable to remember that this must be an integer hinders us to detect
-            // the following (100% wrong) case
-            //
-            // SUBROUTINE S(A, N)
-            //    IMPLICIT NONE
-            //
-            //    INTEGER :: A(N+1)
-            //    REAL :: N         ! Error: N is used in a way that cannot have this type
-            //                      ! We will not detect this case!
-            //
-            // Note that this extension is utterly broken since we could write this
-            //
-            // SUBROUTINE S(N)
-            //    IMPLICIT NONE
-            //
-            //    INTEGER :: A(KIND(N))   ! Aha...
-            //    INTEGER(KIND=8) :: N    ! What now?
-            //
-            // Every compiler will react on a different way. Some will assume a default kind for N (i.e. 4)
-            // some others will complain of KIND(N) (though they do not in the case of 'N + 1', etc)
-            //
-            // Any approach is not driven by the standard, so anything we do is
-            // both OK and wrong at the same time
-        }
-        else
-        {
-            error_printf_at(ast_get_locus(sym), "symbol '%s' has no IMPLICIT type\n",
-                    entry->symbol_name);
-            *nodecl_output = nodecl_make_err_expr(ast_get_locus(sym));
-            return;
-        }
+        error_printf_at(ast_get_locus(sym), "symbol '%s' has no IMPLICIT type\n",
+                entry->symbol_name);
+        *nodecl_output = nodecl_make_err_expr(ast_get_locus(sym));
+        return;
     }
 
 
@@ -5196,9 +5105,7 @@ void fortran_check_initialization(
         return;
     }
 
-    fortran_push_checking_initializer();
     fortran_check_expression(expr, decl_context, nodecl_output);
-    fortran_pop_checking_initializer();
 
     if (nodecl_is_err_expr(*nodecl_output))
         return;
