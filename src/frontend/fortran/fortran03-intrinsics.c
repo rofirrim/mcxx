@@ -1416,6 +1416,7 @@ void copy_intrinsic_function_info(scope_entry_t* entry, scope_entry_t* intrinsic
 
     COPY_SPEC(is_global_hidden);
     COPY_SPEC(is_builtin);
+    COPY_SPEC(is_elemental);
     COPY_SPEC(is_intrinsic_function);
     COPY_SPEC(is_intrinsic_subroutine);
     COPY_SPEC(simplify_function);
