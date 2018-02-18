@@ -131,47 +131,43 @@ static void build_scope_delay_list_run(
 {
     build_scope_delay_list_t *delay_list = build_scope_delay_list_current();
 
-    // We work on a copy so we allow the handlers to add delay actions in this
-    // same category if they want.
-    int i;
-    int num_delayed = delay_list->categories[delay_category].num_delayed;
-
-    build_scope_delay_info_t *copy_delayed
-        = NEW_VEC0(build_scope_delay_info_t, num_delayed);
-    memcpy(copy_delayed,
-           delay_list->categories[delay_category].list,
-           sizeof(*copy_delayed) * num_delayed);
-
-    DELETE(delay_list->categories[delay_category].list);
-    delay_list->categories[delay_category].num_delayed = 0;
-    delay_list->categories[delay_category].list = NULL;
-
-    for (i = 0; i < num_delayed; i++)
+    while (delay_list->categories[delay_category].num_delayed != 0)
     {
-        nodecl_t nodecl_current = nodecl_null();
-        (copy_delayed[i].fun)(copy_delayed[i].data, &nodecl_current);
+        // We work on a copy so we allow the handlers to add delay actions in
+        // this same category if they want.
+        int i;
+        int num_delayed = delay_list->categories[delay_category].num_delayed;
 
-        if (nodecl_output != NULL)
+        build_scope_delay_info_t *copy_delayed
+            = NEW_VEC0(build_scope_delay_info_t, num_delayed);
+        memcpy(copy_delayed,
+               delay_list->categories[delay_category].list,
+               sizeof(*copy_delayed) * num_delayed);
+
+        DELETE(delay_list->categories[delay_category].list);
+        delay_list->categories[delay_category].num_delayed = 0;
+        delay_list->categories[delay_category].list = NULL;
+
+        for (i = 0; i < num_delayed; i++)
         {
-            *nodecl_output
-                = nodecl_concat_lists(*nodecl_output, nodecl_current);
-        }
-        else if (!nodecl_is_null(nodecl_current))
-        {
-            internal_error(
-                "Delayed action generates nodecl but there is no output "
-                "nodecl\n",
-                0);
-        }
-    }
+            nodecl_t nodecl_current = nodecl_null();
+            (copy_delayed[i].fun)(copy_delayed[i].data, &nodecl_current);
 
-    DELETE(copy_delayed);
+            if (nodecl_output != NULL)
+            {
+                *nodecl_output
+                    = nodecl_concat_lists(*nodecl_output, nodecl_current);
+            }
+            else if (!nodecl_is_null(nodecl_current))
+            {
+                internal_error(
+                    "Delayed action generates nodecl but there is no output "
+                    "nodecl\n",
+                    0);
+            }
+        }
 
-    // It may happen that the delayed actions have added more actions in this
-    // category, so run it again if this is the case.
-    if (delay_list->categories[delay_category].num_delayed != 0)
-    {
-        build_scope_delay_list_run(delay_category, nodecl_output);
+        DELETE(copy_delayed);
     }
 }
 
