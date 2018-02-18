@@ -105,20 +105,6 @@ static void build_scope_delay_list_pop(void)
     _current_delay_stack_idx--;
 }
 
-// FIXME: Use it
-// static void build_scope_delay_list_cleanup(build_scope_delay_list_t* delay_list)
-// {
-//     // Cleanup all what has not been run (not necessarily an error)
-//     // FIXME: There is no way to delete the data pointer of build_scope_delay_info_t
-//     int i;
-//     for (i = 0; i < DELAY_NUM_CATEGORIES; i++)
-//     {
-//         DELETE(delay_list->categories[i].list);
-//         delay_list->categories[i].num_delayed = 0;
-//         delay_list->categories[i].list = NULL;
-//     }
-// }
-
 static build_scope_delay_list_t* build_scope_delay_list_current(void)
 {
     ERROR_CONDITION(_current_delay_stack_idx == 0, "Empty stack", 0);
