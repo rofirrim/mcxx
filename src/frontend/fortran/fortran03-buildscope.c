@@ -162,7 +162,11 @@ static void build_scope_delay_list_add(
     build_scope_delay_fun_t *fun,
     void *data)
 {
-    ERROR_CONDITION(_current_delay_stack_idx == 0, "No active delay list", 0);
+    // If there is no stack of delayed actions we can't really push anything.
+    // While this might be considered a bug, there are cases where the FE runs
+    // its own routines in contexts where the full behaviour is not needed.
+    if (_current_delay_stack_idx == 0)
+        return;
 
     build_scope_delay_info_t new_delayed = { fun, data };
 
