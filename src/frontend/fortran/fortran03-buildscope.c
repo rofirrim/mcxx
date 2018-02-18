@@ -286,19 +286,11 @@ void fortran_initialize_translation_unit_scope(translation_unit_t* translation_u
 
     translation_unit->module_file_cache = rb_tree_create((int (*)(const void*, const void*))strcasecmp, null_dtor, null_dtor);
 
-    // Some initializations may call functions that
-    // use delayed actions. Create a fake delayed
-    // context for them.
-    // FIXME: We are not running them but we
-    // should clean up the lists at some point.
-    build_scope_delay_list_t delay_list = { };
-    build_scope_delay_list_push(&delay_list);
-
+    // We should not be running anything here that does
+    // require those delayed functions to actually be run.
     fortran_init_kinds();
     fortran_init_globals(decl_context);
     fortran_init_intrinsics(decl_context);
-
-    build_scope_delay_list_pop();
 }
 
 static void fortran_init_globals(const decl_context_t* decl_context)
