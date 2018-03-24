@@ -280,113 +280,71 @@ namespace TL { namespace OpenMP {
         _core.phase_cleanup_end_of_pipeline(data_flow);
     }
 
-#define INVALID_STATEMENT_HANDLER(_name) \
-        void Base::_name##_handler_pre(TL::PragmaCustomStatement ctr) { \
-            error_printf_at(ctr.get_locus(), "invalid '#pragma %s %s'\n",  \
-                    ctr.get_text().c_str(), \
-                    ctr.get_pragma_line().get_text().c_str()); \
-        } \
-        void Base::_name##_handler_post(TL::PragmaCustomStatement) { }
+#define CLASSNAME Base
+#include "tl-omp-def-undef-macros.hpp"
 
-#define INVALID_DECLARATION_HANDLER(_name) \
-        void Base::_name##_handler_pre(TL::PragmaCustomDeclaration ctr) { \
-            error_printf_at(ctr.get_locus(), "invalid '#pragma %s %s'\n",  \
-                    ctr.get_text().c_str(), \
-                    ctr.get_pragma_line().get_text().c_str()); \
-        } \
-        void Base::_name##_handler_post(TL::PragmaCustomDeclaration) { }
+    OMP_INVALID_DECLARATION_HANDLER(atomic)
+    OMP_INVALID_DECLARATION_HANDLER(critical)
+    OMP_INVALID_DECLARATION_HANDLER(distribute)
+    OMP_INVALID_DECLARATION_HANDLER(distribute_parallel_do)
+    OMP_INVALID_DECLARATION_HANDLER(distribute_parallel_for)
+    OMP_INVALID_DECLARATION_HANDLER(do)
+    OMP_INVALID_DECLARATION_HANDLER(for)
+    OMP_INVALID_DECLARATION_HANDLER(master)
+    OMP_INVALID_DECLARATION_HANDLER(parallel)
+    OMP_INVALID_DECLARATION_HANDLER(parallel_do)
+    OMP_INVALID_DECLARATION_HANDLER(parallel_for)
+    OMP_INVALID_DECLARATION_HANDLER(parallel_sections)
+    OMP_INVALID_DECLARATION_HANDLER(parallel_simd_for)
+    OMP_INVALID_DECLARATION_HANDLER(sections)
+    OMP_INVALID_DECLARATION_HANDLER(simd_for)
+    OMP_INVALID_DECLARATION_HANDLER(single)
+    OMP_INVALID_DECLARATION_HANDLER(target_data)
+    OMP_INVALID_DECLARATION_HANDLER(target_teams)
+    OMP_INVALID_DECLARATION_HANDLER(target_teams_distribute)
+    OMP_INVALID_DECLARATION_HANDLER(target_teams_distribute_parallel_do)
+    OMP_INVALID_DECLARATION_HANDLER(target_teams_distribute_parallel_for)
+    OMP_INVALID_DECLARATION_HANDLER(taskgroup)
+    OMP_INVALID_DECLARATION_HANDLER(taskloop)
+    OMP_INVALID_DECLARATION_HANDLER(teams)
+    OMP_INVALID_DECLARATION_HANDLER(teams_distribute)
+    OMP_INVALID_DECLARATION_HANDLER(teams_distribute_parallel_do)
+    OMP_INVALID_DECLARATION_HANDLER(teams_distribute_parallel_for)
+    OMP_INVALID_DECLARATION_HANDLER(workshare)
 
-        INVALID_DECLARATION_HANDLER(parallel)
-        INVALID_DECLARATION_HANDLER(parallel_for)
-        INVALID_DECLARATION_HANDLER(parallel_simd_for)
-        INVALID_DECLARATION_HANDLER(parallel_do)
-        INVALID_DECLARATION_HANDLER(for)
-        INVALID_DECLARATION_HANDLER(simd_for)
-        INVALID_DECLARATION_HANDLER(do)
-        INVALID_DECLARATION_HANDLER(parallel_sections)
-        INVALID_DECLARATION_HANDLER(sections)
-        INVALID_DECLARATION_HANDLER(single)
-        INVALID_DECLARATION_HANDLER(workshare)
-        INVALID_DECLARATION_HANDLER(critical)
-        INVALID_DECLARATION_HANDLER(atomic)
-        INVALID_DECLARATION_HANDLER(master)
-        INVALID_DECLARATION_HANDLER(teams)
-        INVALID_DECLARATION_HANDLER(distribute)
-        INVALID_DECLARATION_HANDLER(distribute_parallel_for)
-        INVALID_DECLARATION_HANDLER(distribute_parallel_do)
-        INVALID_DECLARATION_HANDLER(target_teams)
-        INVALID_DECLARATION_HANDLER(target_data)
-        INVALID_DECLARATION_HANDLER(teams_distribute)
-        INVALID_DECLARATION_HANDLER(target_teams_distribute)
-        INVALID_DECLARATION_HANDLER(teams_distribute_parallel_for)
-        INVALID_DECLARATION_HANDLER(teams_distribute_parallel_do)
-        INVALID_DECLARATION_HANDLER(target_teams_distribute_parallel_for)
-        INVALID_DECLARATION_HANDLER(target_teams_distribute_parallel_do)
-        INVALID_DECLARATION_HANDLER(taskloop)
-        INVALID_DECLARATION_HANDLER(taskgroup)
+    OMP_INVALID_STATEMENT_HANDLER(declare_simd)
 
-        INVALID_STATEMENT_HANDLER(declare_simd)
+    OMP_EMPTY_DECLARATION_HANDLER(ordered)
 
-#define EMPTY_HANDLERS_CONSTRUCT(_name) \
-        void Base::_name##_handler_pre(TL::PragmaCustomStatement) { } \
-        void Base::_name##_handler_post(TL::PragmaCustomStatement) { } \
-        void Base::_name##_handler_pre(TL::PragmaCustomDeclaration) { } \
-        void Base::_name##_handler_post(TL::PragmaCustomDeclaration) { }
+    OMP_EMPTY_DIRECTIVE_HANDLER(section)
 
-#define EMPTY_HANDLERS_STATEMENT(_name) \
-        void Base::_name##_handler_pre(TL::PragmaCustomStatement) { } \
-        void Base::_name##_handler_post(TL::PragmaCustomStatement) { }
+    OMP_EMPTY_STATEMENT_HANDLER(distribute_parallel_do)
+    OMP_EMPTY_STATEMENT_HANDLER(distribute_parallel_for)
+    OMP_EMPTY_STATEMENT_HANDLER(ordered)
+    OMP_EMPTY_STATEMENT_HANDLER(target_teams)
+    OMP_EMPTY_STATEMENT_HANDLER(target_teams_distribute)
+    OMP_EMPTY_STATEMENT_HANDLER(target_teams_distribute_parallel_do)
+    OMP_EMPTY_STATEMENT_HANDLER(target_teams_distribute_parallel_for)
+    OMP_EMPTY_STATEMENT_HANDLER(teams_distribute)
+    OMP_EMPTY_STATEMENT_HANDLER(teams_distribute_parallel_do)
+    OMP_EMPTY_STATEMENT_HANDLER(teams_distribute_parallel_for)
 
-#define EMPTY_HANDLERS_DIRECTIVE(_name) \
-        void Base::_name##_handler_pre(TL::PragmaCustomDirective) { } \
-        void Base::_name##_handler_post(TL::PragmaCustomDirective) { }
+    /* --------------- OmpSs-2 ---------------- */
 
-        EMPTY_HANDLERS_CONSTRUCT(ordered)
+    OSS_TO_OMP_STATEMENT_HANDLER(atomic)
+    OSS_TO_OMP_STATEMENT_HANDLER(critical)
+    OSS_TO_OMP_STATEMENT_HANDLER(task)
 
-        EMPTY_HANDLERS_DIRECTIVE(section)
+    OSS_TO_OMP_DECLARATION_HANDLER(atomic)
+    OSS_TO_OMP_DECLARATION_HANDLER(critical)
+    OSS_TO_OMP_DECLARATION_HANDLER(task)
 
-        EMPTY_HANDLERS_STATEMENT(distribute_parallel_for)
-        EMPTY_HANDLERS_STATEMENT(distribute_parallel_do)
-        EMPTY_HANDLERS_STATEMENT(target_teams)
-        EMPTY_HANDLERS_STATEMENT(teams_distribute)
-        EMPTY_HANDLERS_STATEMENT(target_teams_distribute)
-        EMPTY_HANDLERS_STATEMENT(teams_distribute_parallel_for)
-        EMPTY_HANDLERS_STATEMENT(teams_distribute_parallel_do)
-        EMPTY_HANDLERS_STATEMENT(target_teams_distribute_parallel_for)
-        EMPTY_HANDLERS_STATEMENT(target_teams_distribute_parallel_do)
+    OSS_TO_OMP_DIRECTIVE_HANDLER(taskwait)
 
-#define OSS_WRAPPER_TO_OMP_DECLARATION(_name) \
-        void Base::oss_##_name##_handler_pre(TL::PragmaCustomDeclaration construct) {\
-            _name##_handler_pre(construct); \
-        } \
-        void Base::oss_##_name##_handler_post(TL::PragmaCustomDeclaration construct) {\
-            _name##_handler_post(construct); \
-        }
-#define OSS_WRAPPER_TO_OMP_DIRECTIVE(_name) \
-        void Base::oss_##_name##_handler_pre(TL::PragmaCustomDirective construct) {\
-            _name##_handler_pre(construct); \
-        } \
-        void Base::oss_##_name##_handler_post(TL::PragmaCustomDirective construct) {\
-            _name##_handler_post(construct); \
-        }
-#define OSS_WRAPPER_TO_OMP_STATEMENT(_name) \
-        void Base::oss_##_name##_handler_pre(TL::PragmaCustomStatement construct) {\
-            _name##_handler_pre(construct); \
-        } \
-        void Base::oss_##_name##_handler_post(TL::PragmaCustomStatement construct) {\
-            _name##_handler_post(construct); \
-        }
-        OSS_WRAPPER_TO_OMP_DIRECTIVE(taskwait)
-        OSS_WRAPPER_TO_OMP_DECLARATION(task)
-        OSS_WRAPPER_TO_OMP_STATEMENT(task)
-        OSS_WRAPPER_TO_OMP_STATEMENT(critical)
-        OSS_WRAPPER_TO_OMP_DECLARATION(critical)
-        OSS_WRAPPER_TO_OMP_STATEMENT(atomic)
-        OSS_WRAPPER_TO_OMP_DECLARATION(atomic)
+    OSS_INVALID_DECLARATION_HANDLER(loop)
 
-#undef OSS_WRAPPER_TO_OMP_DECLARATION
-#undef OSS_WRAPPER_TO_OMP_DIRECTIVE
-#undef OSS_WRAPPER_TO_OMP_STATEMENT
+#include "tl-omp-def-undef-macros.hpp"
+
 
     void Base::set_simd(const std::string &simd_enabled_str)
     {
@@ -715,30 +673,12 @@ namespace TL { namespace OpenMP {
     // Inline tasks
     void Base::task_handler_pre(TL::PragmaCustomStatement construct)
     {
-        // In OmpSs-2 the taskloop construct is supported as '#pragma oss task loop'
-        if(PragmaUtils::is_pragma_construct("oss", construct)
-                && construct.get_pragma_line().get_clause("loop").is_defined())
-        {
-            taskloop_runtime_based_handler_pre(construct);
-        }
-        else
-        {
-            // Do nothing
-        }
+        // Do nothing
     }
 
     void Base::task_handler_post(TL::PragmaCustomStatement directive)
     {
-        // In OmpSs-2 the taskloop construct is supported as '#pragma oss task loop'
-        PragmaCustomLine pragma_line = directive.get_pragma_line();
-        if(PragmaUtils::is_pragma_construct("oss", directive)
-                && pragma_line.get_clause("loop").is_defined())
-        {
-            taskloop_runtime_based_handler_post(directive);
-            return;
-        }
-
-
+        TL::PragmaCustomLine pragma_line = directive.get_pragma_line();
         OpenMP::DataEnvironment &ds = _core.get_openmp_info()->get_data_environment(directive);
 
         if (emit_omp_report())
@@ -1595,8 +1535,8 @@ namespace TL { namespace OpenMP {
         }
     }
 
-    void Base::taskloop_runtime_based_handler_pre(TL::PragmaCustomStatement directive) { }
-    void Base::taskloop_runtime_based_handler_post(TL::PragmaCustomStatement directive)
+    void Base::oss_loop_handler_pre(TL::PragmaCustomStatement directive) { }
+    void Base::oss_loop_handler_post(TL::PragmaCustomStatement directive)
     {
         Nodecl::NodeclBase statement = directive.get_statements();
         ERROR_CONDITION(!statement.is<Nodecl::List>(), "Invalid tree", 0);
@@ -1607,7 +1547,7 @@ namespace TL { namespace OpenMP {
         {
             *_omp_report_file
                 << "\n"
-                << directive.get_locus_str() << ": " << "TASK LOOP construct\n"
+                << directive.get_locus_str() << ": " << "LOOP construct\n"
                 << directive.get_locus_str() << ": " << "------------------\n"
                 ;
         }
@@ -1679,7 +1619,7 @@ namespace TL { namespace OpenMP {
 
         execution_environment.append(Nodecl::OmpSs::Chunksize::make(chunksize));
 
-        Nodecl::NodeclBase stmt = Nodecl::OpenMP::Taskloop::make(
+        Nodecl::NodeclBase stmt = Nodecl::OmpSs::Loop::make(
                 execution_environment,
                 Nodecl::Context::make(
                     Nodecl::List::make(normalized_loop),

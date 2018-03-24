@@ -369,6 +369,7 @@ nodecl_t build_scope_fortran_translation_unit(translation_unit_t* translation_un
     // Technically Fortran does not have a global scope but it is convenient to have one
     const decl_context_t* decl_context = translation_unit->global_decl_context;
 
+
     nodecl_t nodecl_program_units = nodecl_null();
     AST list = ASTSon0(a);
     if (list != NULL)
@@ -1175,7 +1176,7 @@ static const char *statement_order_class_print(
 ORDER_CLASS_TABLE
 #undef ORDER_CLASS
 
-const statement_order_class_t statement_order[] = {
+static const statement_order_class_t statement_order[] = {
     SOC_EVERYWHERE | SOC_USE,
     SOC_EVERYWHERE | SOC_IMPORT,
     SOC_EVERYWHERE | SOC_FORMAT | SOC_ENTRY | SOC_IMPLICIT_NONE,
@@ -1185,7 +1186,7 @@ const statement_order_class_t statement_order[] = {
 };
 
 enum { STATEMENT_ORDER_NUM = sizeof(statement_order) / sizeof(*statement_order) };
-const statement_order_class_t *statement_order_end = &statement_order[STATEMENT_ORDER_NUM];
+static const statement_order_class_t *statement_order_end = &statement_order[STATEMENT_ORDER_NUM];
 
 typedef struct statement_constraint_checker_t statement_constraint_checker_t;
 typedef char (*allowed_statement_t)(statement_constraint_checker_t *,
@@ -1197,10 +1198,7 @@ struct statement_constraint_checker_t
     allowed_statement_t allowed_statement;
 };
 
-statement_constraint_checker_t statement_constraint_checker_init(
-    allowed_statement_t allowed_statement);
-
-statement_constraint_checker_t statement_constraint_checker_init(
+static statement_constraint_checker_t statement_constraint_checker_init(
     allowed_statement_t allowed_statement)
 {
     statement_constraint_checker_t ret
@@ -2368,7 +2366,6 @@ static scope_entry_t* new_procedure_symbol(
                 // If the symbol already has an lvalue reference type it means
                 // that we have already visited a dummy argument with the same
                 // name. Thus, we should emit an error.
-                // FIXME: This check is not very robust.
                 if (dummy_arg->type_information != NULL
                         && is_lvalue_reference_type(dummy_arg->type_information))
                 {
@@ -2766,6 +2763,8 @@ static scope_entry_t* new_entry_symbol(const decl_context_t* decl_context,
 }
 
 static void build_scope_ambiguity_statement(AST ambig_stmt, const decl_context_t* decl_context, char is_declaration);
+
+static void fortran_build_scope_statement(AST statement, const decl_context_t* decl_context, nodecl_t* nodecl_output);
 
 static void build_scope_program_unit_body_declarations(
         statement_constraint_checker_t *constraint_checker,
@@ -3454,12 +3453,11 @@ static void init_statement_array(void)
     }
 }
 
-static build_scope_statement_handler_t *statement_get_statement_handler(
-    AST statement)
+static build_scope_statement_handler_t *statement_get_statement_handler(node_t ast_kind)
 {
     init_statement_array();
 
-    build_scope_statement_handler_t key = {.ast_kind = ASTKind(statement) };
+    build_scope_statement_handler_t key = {.ast_kind = ast_kind };
     build_scope_statement_handler_t *handler = NULL;
 
     handler = (build_scope_statement_handler_t *)bsearch(
@@ -3476,7 +3474,7 @@ static build_scope_statement_handler_t *statement_get_statement_handler(
 static statement_order_class_t statement_get_order_class(AST statement)
 {
     build_scope_statement_handler_t *handler
-        = statement_get_statement_handler(statement);
+        = statement_get_statement_handler(ASTKind(statement));
 
     ERROR_CONDITION(handler == NULL || handler->get_order_class == NULL,
                     "Invalid statement order class %s",
@@ -3535,14 +3533,14 @@ static char statement_constraint_checker_update_order(
     return 0;
 }
 
-void fortran_build_scope_statement(AST statement, const decl_context_t* decl_context, nodecl_t* nodecl_output)
+static void fortran_build_scope_statement(AST statement, const decl_context_t* decl_context, nodecl_t* nodecl_output)
 {
     DEBUG_CODE()
     {
         fprintf(stderr, "=== [%s] Statement ===\n", ast_location(statement));
     }
 
-    build_scope_statement_handler_t *handler = statement_get_statement_handler(statement);
+    build_scope_statement_handler_t *handler = statement_get_statement_handler(ASTKind(statement));
 
     if (handler == NULL
             || handler->handler == NULL)
@@ -3554,6 +3552,25 @@ void fortran_build_scope_statement(AST statement, const decl_context_t* decl_con
     {
         (handler->handler)(statement, decl_context, nodecl_output);
     }
+}
+
+static void build_scope_compound_statement_relaxed(AST a, const decl_context_t* decl_context, nodecl_t* nodecl_output);
+
+//! This function is only used by TL::Source
+void fortran_build_scope_statement_from_source(AST statement, const decl_context_t* decl_context, nodecl_t* nodecl_output)
+{
+    // We are a bit restrictive when dealing with AST_COMPOUND_STATEMENT: we do
+    // not allow any declaration neither an IMPLICIT NONE. This is more or less
+    // fine for the Fortran FE (in fact we DO have AST_COMPOUND_STATEMENT with
+    // declarations inside but they are not handled by 'build_scope_compound_statement'
+    // function), but it's a bit anoying when the AST_COMPOUND_STATEMENT comes
+    // from a TL::Source that was filled by another phase
+    build_scope_statement_handler_t* compound_stmt_handler = statement_get_statement_handler(AST_COMPOUND_STATEMENT);
+    compound_stmt_handler->handler = build_scope_compound_statement_relaxed;
+
+    fortran_build_scope_statement(statement, decl_context, nodecl_output);
+
+    compound_stmt_handler->handler = build_scope_compound_statement;
 }
 
 static void fortran_build_scope_statement_inside_block_context(
@@ -5374,6 +5391,15 @@ static void build_scope_default_statement(AST a, const decl_context_t* decl_cont
     *nodecl_output = 
         nodecl_make_list_1(
                 nodecl_make_default_statement(nodecl_statement, ast_get_locus(a)));
+}
+
+static void build_scope_compound_statement_relaxed(AST a, const decl_context_t* decl_context, nodecl_t* nodecl_output)
+{
+    statement_constraint_checker_t constraint_checker
+        = statement_constraint_checker_init(allow_all_statements);
+
+    build_scope_construct_statements(
+        a, decl_context, nodecl_output, &constraint_checker);
 }
 
 static void build_scope_compound_statement(AST a, const decl_context_t* decl_context, nodecl_t* nodecl_output)

@@ -175,9 +175,6 @@ AC_SUBST([sqlite3_LIBS])
 dnl ----- End Sqlite ---------------------------
 
 
-AX_CHECK_CUDA
-
-
 dnl --- Suport for Extrae --------------
 extrae_support="no"
 AC_MSG_CHECKING([if Extrae support has been enabled])
@@ -267,40 +264,6 @@ AC_ARG_ENABLE([fortran-tests],
 FORTRAN_TESTS_ENABLED=$fortran_tests_enabled
 AC_SUBST([FORTRAN_TESTS_ENABLED])
 dnl -- End Fortran tests ---
-
-
-dnl -- New Fortran scanner ---
-fortran_new_scanner="yes"
-AC_MSG_CHECKING([if new Fortran scanner has been enabled])
-AC_ARG_ENABLE([new-fortran-scanner],
-    AS_HELP_STRING([--enable-new-fortran-scanner], [Enables new Fortran scanner]),
-    [
-      if test x$enableval = xyes -o x$enableval = x;
-      then
-         fortran_new_scanner="yes"
-         dnl no, they have not been disabled
-         AC_MSG_RESULT([yes])
-      else if test x$enableval = xno;
-           then
-              fortran_new_scanner="no"
-              AC_MSG_RESULT([no])
-           else
-              AC_MSG_ERROR([This option can only be given 'yes' or 'no' values])
-           fi
-      fi
-    ],
-    [
-       AC_MSG_RESULT([no])
-    ]
-)
-FORTRAN_NEW_SCANNER=$fortran_new_scanner
-AC_SUBST([FORTRAN_NEW_SCANNER])
-AM_CONDITIONAL([FORTRAN_NEW_SCANNER], test x$fortran_new_scanner = xyes)
-if test x$fortran_new_scanner = xyes;
-then
-    AC_DEFINE([FORTRAN_NEW_SCANNER], 1, [Define to 1 if binaries are installed in pkglibdir])
-fi
-dnl -- End New Fortran scanner --
 
 
 dnl -- Extra compilers ---
@@ -900,26 +863,13 @@ AC_MSG_RESULT([$enable_nanox_cuda_device])
 nanox_supports_cuda=no
 if test x"$is_enabled_tl_omp_nanox" = x"yes";
 then
-    #backup vars before we do the test
-    CFLAGSBACKUP="$CFLAGS"
-    CPPFLAGSBACKUP="$CPPFLAGS"
-    CXXFLAGSBACKUP="$CXXFLAGS"
-
-    CFLAGS="$CFLAGS -I$nanox_include -I$CUDA_INCLUDES"
-    CPPFLAGS="$CPPFLAGS -I$nanox_include -I$CUDA_INCLUDES"
-    CXXFLAGS="$CXXFLAGS -I$nanox_include -I$CUDA_INCLUDES"
-
-    AC_CHECK_HEADER([nanos-gpu.h], [nanox_supports_cuda=yes])
-
-    CFLAGS="$CFLAGSBACKUP"
-    CPPFLAGS="$CPPFLAGSBACKUP"
-    CXXFLAGS="$CXXFLAGSBACKUP"
+    AC_CHECK_FILE([$nanox_include/nanos-gpu.h],[nanox_supports_cuda=yes])
     AC_MSG_CHECKING([whether Nanos++ was configured with CUDA support])
     AC_MSG_RESULT([$nanox_supports_cuda])
 fi
 
 ompss_supports_cuda="no"
-if test x"$ax_cv_check_cuda" = x"yes" -a x"$enable_nanox_cuda_device" = x"yes" -a x"$nanox_supports_cuda" = x"yes";
+if test x"$enable_nanox_cuda_device" = x"yes" -a x"$nanox_supports_cuda" = x"yes";
 then
     ompss_supports_cuda="yes"
 fi
@@ -1256,47 +1206,9 @@ fi
 dnl ---------------------- End of Support for OmpSs-2 Nanos6 -----------------------------------------
 
 
-dnl --------------------- Dynamic Load Balancing -------------------------------
-# Eventually we can attempt to figure this out from the nanos-installation
-is_enabled_dlb="no"
-dlb_include=""
-dlb_lib=""
-AC_ARG_WITH([dlb],
-       AS_HELP_STRING([--with-dlb=dir], [Directory of Dynamic Load Balancing (DLB) installation]),
-       [
-        dlb_include="${withval}/include"
-        dlb_lib="${withval}/lib"
-       ]
-)
-AC_ARG_WITH([dlb-include],
-       AS_HELP_STRING([--with-dlb-include=dir], [Directory of Dynamic Load Balancing (DLB) headers]),
-       [
-        dlb_include="${withval}"
-       ]
-)
-
-AC_ARG_WITH([dlb-lib],
-       AS_HELP_STRING([--with-dlb-lib=dir], [Directory of Dynamic Load Balancing (DLB) libraries]),
-       [
-        dlb_lib="${withval}"
-       ]
-)
-
-DLB_INCLUDE=$dlb_include
-DLB_LIB=$dlb_lib
-
-DLB_GATE=":false:"
-if test -n "$dlb_include" -a -n "$dlb_lib";
-then
-    is_enabled_dlb="yes"
-    DLB_GATE="dlb"
-fi
-
-AC_SUBST([DLB_GATE])
-
-AC_SUBST([DLB_INCLUDE])
-AC_SUBST([DLB_LIB])
-dnl --------------------- End of Dynamic Load Balancing -------------------------------
+dnl ---------------------- DLB support ---------------------------------
+AX_DLB
+dnl ---------------------- End of DLB support ---------------------------------
 
 
 dnl --------------------- Support for GOMP ---------------------------------
@@ -1847,6 +1759,8 @@ AM_CONDITIONAL([RUNNING_DISTCHECK], test x$distcheck_processing = xyes)
 
 GCC=$GCC_BE
 GXX=$GXX_BE
+
+AC_CHECK_PROG([NVCC], [nvcc], [nvcc])
 
 # Make these variables precious
 AC_ARG_VAR([FLEX], [Flex])
@@ -2411,7 +2325,6 @@ AC_CONFIG_FILES([tests/config/bets], [chmod +x tests/config/bets])
 AC_CONFIG_FILES([tests/config/mercurium], [chmod +x tests/config/mercurium])
 AC_CONFIG_FILES([tests/config/mercurium-analysis], [chmod +x tests/config/mercurium-analysis])
 AC_CONFIG_FILES([tests/config/mercurium-c11], [chmod +x tests/config/mercurium-c11])
-AC_CONFIG_FILES([tests/config/mercurium-cuda], [chmod +x tests/config/mercurium-cuda])
 AC_CONFIG_FILES([tests/config/mercurium-cxx11], [chmod +x tests/config/mercurium-cxx11])
 AC_CONFIG_FILES([tests/config/mercurium-cxx14], [chmod +x tests/config/mercurium-cxx14])
 AC_CONFIG_FILES([tests/config/mercurium-extensions], [chmod +x tests/config/mercurium-extensions])
@@ -2425,8 +2338,9 @@ AC_CONFIG_FILES([tests/config/mercurium-nanos6], [chmod +x tests/config/mercuriu
 AC_CONFIG_FILES([tests/config/mercurium-nanox], [chmod +x tests/config/mercurium-nanox])
 AC_CONFIG_FILES([tests/config/mercurium-omp], [chmod +x tests/config/mercurium-omp])
 AC_CONFIG_FILES([tests/config/mercurium-ompss], [chmod +x tests/config/mercurium-ompss])
+AC_CONFIG_FILES([tests/config/mercurium-ompss-cuda], [chmod +x tests/config/mercurium-ompss-cuda])
+AC_CONFIG_FILES([tests/config/mercurium-ompss-opencl], [chmod +x tests/config/mercurium-ompss-opencl])
 AC_CONFIG_FILES([tests/config/mercurium-ompss-2], [chmod +x tests/config/mercurium-ompss-2])
-AC_CONFIG_FILES([tests/config/mercurium-opencl], [chmod +x tests/config/mercurium-opencl])
 AC_CONFIG_FILES([tests/config/mercurium-parallel-simd], [chmod +x tests/config/mercurium-parallel-simd])
 AC_CONFIG_FILES([tests/config/mercurium-parallel-simd-avx2], [chmod +x tests/config/mercurium-parallel-simd-avx2])
 AC_CONFIG_FILES([tests/config/mercurium-parallel-simd-mic], [chmod +x tests/config/mercurium-parallel-simd-mic])
@@ -2463,13 +2377,6 @@ echo "Mercurium configuration summary"
 echo "==============================="
 echo ""
 echo " * C++ dialect used to build Mercurium : $cxxdialect"
-echo ""
-if test x$fortran_new_scanner = xyes;
-then
-    echo " * Fortran scanner: new, more precise, handmade scanner"
-else
-    echo " * Fortran scanner: traditional, less precise, flex-based scanner"
-fi
 echo ""
 echo " * Tools configured:"
 echo ""
@@ -2530,6 +2437,9 @@ then
   echo ""
   echo "   Nanos++ includes :" $nanox_include
   echo "   Nanos++ libraries:" $nanox_lib
+  echo "   CUDA support:" $ompss_supports_cuda
+  echo "   OpenCL support:" $opencl_valid
+  echo "   MPI Offload support:" $mpi_valid
 
   if test ! -e "$nanox_include" -o ! -d "$nanox_include";
   then
@@ -2559,12 +2469,12 @@ then
 fi
 
 echo ""
-echo " * Dynamic Load Balancing (DLB) :" $is_enabled_dlb
-if test x$is_enabled_dlb = xyes;
+echo " * Dynamic Load Balancing (DLB) :" $ax_cv_is_enabled_dlb
+if test x$ax_cv_is_enabled_dlb = xyes;
 then
   echo ""
-  echo "   DLB includes :" $dlb_include
-  echo "   DLB libraries:" $dlb_lib
+  echo "   DLB includes :" $ax_cv_dlb_include
+  echo "   DLB libraries:" $ax_cv_dlb_lib
 fi
 
 echo ""
@@ -2585,12 +2495,6 @@ then
   echo "   ********************************************************"
 fi
 
-echo ""
-echo " * Devices testing:"
-echo ""
-echo "   MPI testing enabled:" $mpi_valid
-echo "   CUDA testing enabled:" $ompss_supports_cuda
-echo "   OpenCL testing enabled:" $opencl_valid
 echo ""
 echo " * OpenMP static profile mode: " $is_enabled_tl_omp_profile
 echo ""

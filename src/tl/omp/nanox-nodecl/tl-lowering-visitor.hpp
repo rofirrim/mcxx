@@ -287,6 +287,7 @@ class LoweringVisitor : public Nodecl::ExhaustiveVisitor<void>
                 Nodecl::NodeclBase construct);
 
         void allocate_immediate_structure(
+                TL::Type structure_type,
                 OutlineInfo& outline_info,
                 Source &struct_arg_type_name,
                 Source &struct_size,
@@ -411,6 +412,8 @@ class LoweringVisitor : public Nodecl::ExhaustiveVisitor<void>
         static bool there_are_reductions(OutlineInfo& outline_info);
 
         Source full_barrier_source();
+
+        Source full_taskwait_source(bool is_noflush);
 
         void reduction_initialization_code(
                 OutlineInfo& outline_info,
