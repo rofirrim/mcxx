@@ -9616,4 +9616,4 @@ std::string CxxBase::end_inline_comment()
 
 } // Codegen
 
-EXPORT_PHASE(Codegen::CxxBase)
+EXPORT_CODEGEN_PHASE(Codegen::CxxBase, cxx)

@@ -11,7 +11,7 @@ language = C
 {mmic} linker_name = @ICC@
 {mmic} compiler_options = -mmic -O0
 
-codegen_phase = libcodegen-cxx.so
+codegen_phase = cxx
 # gfortran
 target_options[smpfc] = no_sublink embed:partial_linking
 target_options[mfc] = no_sublink embed:partial_linking

@@ -25,10 +25,6 @@
 --------------------------------------------------------------------*/
 
 
-#ifndef FORTRAN_PRETTYPRINT_C
-  #define FORTRAN_PRETTYPRINT_C
-#endif
-
 #ifdef HAVE_CONFIG_H
   #include <config.h>
 #endif
@@ -38,7 +34,6 @@
 #endif
 
 #include "fortran03-prettyprint.h"
-
 
 #include <stdio.h>
 #include <stdarg.h>

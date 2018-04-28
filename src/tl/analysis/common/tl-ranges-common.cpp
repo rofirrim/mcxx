@@ -39,12 +39,12 @@ namespace {
     // ***************************************************************************** //
     // ************* initialize global variables for ranges operations ************* //
 
-    const_value_t* one = const_value_get_one(/*bytes*/ 4, /*signed*/ 1);
-    const_value_t* zero = const_value_get_zero(/*bytes*/ 4, /*signed*/ 1);
-    const_value_t* long_max = const_value_get_integer(LONG_MAX, /*num_bytes*/sizeof(long), /*sign*/1);
-    NBase plus_inf = Nodecl::Analysis::PlusInfinity::make(Type::get_long_int_type(), long_max);
-    const_value_t* long_min = const_value_get_integer(LONG_MIN, /*num_bytes*/sizeof(long), /*sign*/1);
-    NBase minus_inf = Nodecl::Analysis::MinusInfinity::make(Type::get_long_int_type(), long_min);
+    const_value_t* one() { return const_value_get_one(/*bytes*/ 4, /*signed*/ 1); }
+    const_value_t* zero() { return const_value_get_zero(/*bytes*/ 4, /*signed*/ 1); }
+    const_value_t* long_max() { return const_value_get_integer(LONG_MAX, /*num_bytes*/sizeof(long), /*sign*/1); }
+    NBase plus_inf() { return Nodecl::Analysis::PlusInfinity::make(Type::get_long_int_type(), long_max()); }
+    const_value_t* long_min() { return const_value_get_integer(LONG_MIN, /*num_bytes*/sizeof(long), /*sign*/1); }
+    NBase minus_inf() { return Nodecl::Analysis::MinusInfinity::make(Type::get_long_int_type(), long_min()); }
 
     // *********** END initialize global variables for ranges operations *********** //
     // ***************************************************************************** //
@@ -268,14 +268,14 @@ namespace {
         // 2.- Add the boundaries (avoiding overflows when operating with constants)
         NBase b;
         if (b1.is<Nodecl::Analysis::MinusInfinity>()
-                || (b1.is_constant() && const_value_is_zero(const_value_sub(b1.get_constant(), long_min)))
+                || (b1.is_constant() && const_value_is_zero(const_value_sub(b1.get_constant(), long_min())))
                 || b1.is<Nodecl::Analysis::PlusInfinity>()
-                || (b1.is_constant() && const_value_is_zero(const_value_sub(b1.get_constant(), long_max))))
+                || (b1.is_constant() && const_value_is_zero(const_value_sub(b1.get_constant(), long_max()))))
             b = b1;             // -inf + x = -inf, +inf + x = +inf
         else if (b2.is<Nodecl::Analysis::MinusInfinity>()
-                || (b2.is_constant() && const_value_is_zero(const_value_sub(b2.get_constant(), long_min)))
+                || (b2.is_constant() && const_value_is_zero(const_value_sub(b2.get_constant(), long_min())))
                 || b2.is<Nodecl::Analysis::PlusInfinity>()
-                || (b2.is_constant() && const_value_is_zero(const_value_sub(b2.get_constant(), long_max))))
+                || (b2.is_constant() && const_value_is_zero(const_value_sub(b2.get_constant(), long_max()))))
             b = b2;             // x + -inf = -inf, x + +inf = +inf
         else if (b1.is_constant() && b2.is_constant())
             b = NBase(const_value_to_nodecl(const_value_add(b1.get_constant(), b2.get_constant())));
@@ -311,7 +311,7 @@ namespace {
         const NBase& ub = boundary_addition(r1_ub, r2_ub);
 
         // 6.- The increment of a range not representing an induction variable is always 0
-        const NBase& zero_nodecl = NBase(const_value_to_nodecl(zero));
+        const NBase& zero_nodecl = NBase(const_value_to_nodecl(zero()));
 
         // 7.- Build the range
         NBase result =
@@ -338,16 +338,16 @@ namespace {
         // 2.- Subtract the boundaries (avoiding overflows when operating with constants)
         NBase b;
         if (b1.is<Nodecl::Analysis::MinusInfinity>()
-                || (b1.is_constant() && const_value_is_zero(const_value_sub(b1.get_constant(), long_min)))
+                || (b1.is_constant() && const_value_is_zero(const_value_sub(b1.get_constant(), long_min())))
                 || b1.is<Nodecl::Analysis::PlusInfinity>()
-                || (b1.is_constant() && const_value_is_zero(const_value_sub(b1.get_constant(), long_max))))
+                || (b1.is_constant() && const_value_is_zero(const_value_sub(b1.get_constant(), long_max()))))
             b = b1;             // -inf - x = -inf, +inf - x = +inf
         else if (b2.is<Nodecl::Analysis::MinusInfinity>()
-                || (b2.is_constant() && const_value_is_zero(const_value_sub(b2.get_constant(), long_min))))
-            b = plus_inf.shallow_copy();             // x - -inf = +inf
+                || (b2.is_constant() && const_value_is_zero(const_value_sub(b2.get_constant(), long_min()))))
+            b = plus_inf();       // x - -inf = +inf
             else if (b2.is<Nodecl::Analysis::PlusInfinity>()
-                || (b2.is_constant() && const_value_is_zero(const_value_sub(b2.get_constant(), long_max))))
-            b = minus_inf.shallow_copy();            // x - +inf = -inf
+                || (b2.is_constant() && const_value_is_zero(const_value_sub(b2.get_constant(), long_max()))))
+            b = minus_inf();            // x - +inf = -inf
         else if (b1.is_constant() && b2.is_constant())
         {
             if (b2.get_type().is_unsigned_integral()
@@ -390,11 +390,11 @@ namespace {
 
         // 5.- Base case
         // The increment of a range not representing an induction variable is always 0
-        const NBase& zero_nodecl = NBase(const_value_to_nodecl(zero));
+        const NBase& zero_nodecl = NBase(const_value_to_nodecl(zero()));
         if (lb.is_null() || ub.is_null())
             return Nodecl::Range::make(
-                    minus_inf.shallow_copy(),
-                    plus_inf.shallow_copy(),
+                    minus_inf(),
+                    plus_inf(),
                     zero_nodecl,
                     get_range_type(r1.get_type(), r2.get_type()));
 
@@ -429,11 +429,11 @@ namespace {
         {
             if (b2.is<Nodecl::Analysis::MinusInfinity>())
             {   // -inf * -inf
-                b = plus_inf.shallow_copy();
+                b = plus_inf();
             }
             else if (b2.is<Nodecl::Analysis::PlusInfinity>())
             {   // -inf * inf
-                b = minus_inf.shallow_copy();
+                b = minus_inf();
             }
             else if (b2.is_constant())
             {
@@ -444,11 +444,11 @@ namespace {
                 }
                 else if (const_value_is_negative(b2_const))
                 {   // -inf * -k
-                    b = plus_inf.shallow_copy();
+                    b = plus_inf();
                 }
                 else
                 {   // -inf * k
-                    b = minus_inf.shallow_copy();
+                    b = minus_inf();
                 }
             }
             else
@@ -460,11 +460,11 @@ namespace {
         {
             if (b2.is<Nodecl::Analysis::MinusInfinity>())
             {   // inf * -inf
-                b = minus_inf.shallow_copy();
+                b = minus_inf();
             }
             else if (b2.is<Nodecl::Analysis::PlusInfinity>())
             {   // inf * inf
-                b = plus_inf.shallow_copy();
+                b = plus_inf();
             }
             else if (b2.is_constant())
             {
@@ -475,11 +475,11 @@ namespace {
                 }
                 else if (const_value_is_negative(b2_const))
                 {   // inf * -k
-                    b = minus_inf.shallow_copy();
+                    b = minus_inf();
                 }
                 else
                 {   // inf * k
-                    b = plus_inf.shallow_copy();
+                    b = plus_inf();
                 }
             }
             else
@@ -498,11 +498,11 @@ namespace {
                 }
                 else if (const_value_is_negative(b1_const))
                 {   // -k * -inf
-                    b = plus_inf.shallow_copy();
+                    b = plus_inf();
                 }
                 else
                 {   // k * -inf
-                    b = minus_inf.shallow_copy();
+                    b = minus_inf();
                 }
             }
             else if (b2.is<Nodecl::Analysis::PlusInfinity>())
@@ -513,11 +513,11 @@ namespace {
                 }
                 else if (const_value_is_negative(b1_const))
                 {   // -k * inf
-                    b = minus_inf.shallow_copy();
+                    b = minus_inf();
                 }
                 else
                 {   // k * inf
-                    b = plus_inf.shallow_copy();
+                    b = plus_inf();
                 }
             }
             else if (b2.is_constant())
@@ -552,7 +552,7 @@ namespace {
 
         // 3.- Cases
         NBase result;
-        const NBase& zero_nodecl = NBase(const_value_to_nodecl(zero));
+        const NBase& zero_nodecl = NBase(const_value_to_nodecl(zero()));
         if (r1_lb.is_constant() && r1_ub.is_constant()
             && r2_lb.is_constant() && r2_ub.is_constant())
         {   // If all values are known, compute the range
@@ -579,8 +579,8 @@ namespace {
         else
         {   // Otherwise, return the unknown range [-inf, +inf]
             result = Nodecl::Range::make(
-                    minus_inf.shallow_copy(),
-                    plus_inf.shallow_copy(),
+                    minus_inf(),
+                    plus_inf(),
                     zero_nodecl,
                     get_range_type(r1.get_type(), r2.get_type()));
         }
@@ -601,7 +601,7 @@ namespace {
         }
         else if (const_value_is_zero(b1.get_constant()))
         {   // Base case: 0 / x, x != +-inf
-            return NBase(const_value_to_nodecl(zero));
+            return NBase(const_value_to_nodecl(zero()));
         }
         else if ((b1.is<Nodecl::Analysis::MinusInfinity>()
                     || b1.is<Nodecl::Analysis::PlusInfinity>())
@@ -619,11 +619,11 @@ namespace {
                 const_value_t* b2_const = b2.get_constant();
                 if (const_value_is_positive(b2_const))
                 {   // -inf / k
-                    return minus_inf.shallow_copy();
+                    return minus_inf();
                 }
                 else
                 {   // -inf / -k
-                    return plus_inf.shallow_copy();
+                    return plus_inf();
                 }
             }
             else
@@ -638,11 +638,11 @@ namespace {
                 const_value_t* b2_const = b2.get_constant();
                 if (const_value_is_positive(b2_const))
                 {   // +inf / k
-                    return plus_inf.shallow_copy();
+                    return plus_inf();
                 }
                 else
                 {   // +inf / -k
-                    return minus_inf.shallow_copy();
+                    return minus_inf();
                 }
             }
             else
@@ -657,11 +657,11 @@ namespace {
             {
                 if (b2.is<Nodecl::Analysis::MinusInfinity>())
                 {   // k / -inf
-                    return minus_inf.shallow_copy();
+                    return minus_inf();
                 }
                 else if (b2.is<Nodecl::Analysis::PlusInfinity>())
                 {   // k / +inf
-                    return plus_inf.shallow_copy();
+                    return plus_inf();
                 }
                 else if (b2.is_constant())
                 {   // k1 / k2
@@ -677,11 +677,11 @@ namespace {
             {
                 if (b2.is<Nodecl::Analysis::MinusInfinity>())
                 {   // -k / -inf
-                    return plus_inf.shallow_copy();
+                    return plus_inf();
                 }
                 else if (b2.is<Nodecl::Analysis::PlusInfinity>())
                 {   // -k / +inf
-                    return minus_inf.shallow_copy();
+                    return minus_inf();
                 }
                 else if (b2.is_constant())
                 {   // -k1 / k2
@@ -718,7 +718,7 @@ namespace {
         NBase result;
         Type dividend_t = dividend.get_type();
         Type divisor_t = divisor.get_type();
-        const NBase& zero_nodecl = NBase(const_value_to_nodecl(zero));
+        const NBase& zero_nodecl = NBase(const_value_to_nodecl(zero()));
         if (dividend_lb.is_constant() && dividend_ub.is_constant()
             && divisor_lb.is_constant() && divisor_ub.is_constant())
         {   // If all values are known, compute the range
@@ -728,7 +728,7 @@ namespace {
             NBase new_divisor_lb, new_divisor_ub;
             if (const_value_is_zero(divisor_lb.get_constant()))
             {
-                new_divisor_ub = plus_inf.shallow_copy();
+                new_divisor_ub = plus_inf();
             }
             else
             {
@@ -737,11 +737,11 @@ namespace {
                 {
                     divisor_lb_typed = NBase(const_value_to_nodecl(const_value_cast_to_float_value(divisor_lb_typed.get_constant())));
                 }
-                new_divisor_ub = NBase(const_value_to_nodecl(const_value_div(one, divisor_lb_typed.get_constant())));
+                new_divisor_ub = NBase(const_value_to_nodecl(const_value_div(one(), divisor_lb_typed.get_constant())));
             }
             if (const_value_is_zero(divisor_ub.get_constant()))
             {
-                new_divisor_lb = minus_inf.shallow_copy();
+                new_divisor_lb = minus_inf();
             }
             else
             {
@@ -750,7 +750,7 @@ namespace {
                 {
                     divisor_ub_typed = NBase(const_value_to_nodecl(const_value_cast_to_float_value(divisor_ub_typed.get_constant())));
                 }
-                new_divisor_lb = NBase(const_value_to_nodecl(const_value_div(one, divisor_ub_typed.get_constant())));
+                new_divisor_lb = NBase(const_value_to_nodecl(const_value_div(one(), divisor_ub_typed.get_constant())));
             }
             NBase new_divisor = Nodecl::Range::make(new_divisor_lb, new_divisor_ub, zero_nodecl, get_range_type(dividend_t, divisor_t));
             result = range_multiplication(dividend, new_divisor);
@@ -829,8 +829,8 @@ namespace {
         else
         {   // Otherwise, return the unknown range [-inf, +inf]
             result = Nodecl::Range::make(
-                    minus_inf.shallow_copy(),
-                    plus_inf.shallow_copy(),
+                    minus_inf(),
+                    plus_inf(),
                     zero_nodecl,
                     get_range_type(dividend_t, divisor_t));
         }
@@ -888,7 +888,7 @@ namespace {
                 }
                 else 
                 {
-                    NBase zero_nodecl = NBase(const_value_to_nodecl(zero));
+                    NBase zero_nodecl = NBase(const_value_to_nodecl(zero()));
                     if((const_value_is_positive(lb_dif) || const_value_is_zero(lb_dif)) && 
                        (const_value_is_negative(ub_dif) || const_value_is_zero(ub_dif)))
                     {   // r2 contains r1
@@ -897,11 +897,11 @@ namespace {
                     else if((const_value_is_negative(lb_dif) || const_value_is_zero(lb_dif)) && 
                             (const_value_is_positive(ub_dif) || const_value_is_zero(ub_dif)))
                     {   // r2 is contained in r1
-                        const_value_t* new_left_ub_c = const_value_sub(r2_lb_c, one);
+                        const_value_t* new_left_ub_c = const_value_sub(r2_lb_c, one());
                         Nodecl::Range left_range = 
                                 Nodecl::Range::make(r1_lb.shallow_copy(), NBase(const_value_to_nodecl(new_left_ub_c)), 
                                                     zero_nodecl.shallow_copy(), t);
-                        const_value_t* new_right_lb_c = const_value_add(r2_ub_c, one);
+                        const_value_t* new_right_lb_c = const_value_add(r2_ub_c, one());
                         Nodecl::Range right_range = 
                                 Nodecl::Range::make(NBase(const_value_to_nodecl(new_right_lb_c)), r1_ub.shallow_copy(), 
                                                     zero_nodecl.shallow_copy(), t);
@@ -917,13 +917,13 @@ namespace {
                         NBase lb, ub;
                         if(const_value_is_positive(lb_dif))
                         {   // lower bound is the same in both ranges
-                            lb = NBase(const_value_to_nodecl(const_value_add(r2_ub_c, one)));
+                            lb = NBase(const_value_to_nodecl(const_value_add(r2_ub_c, one())));
                             ub = r1_ub.shallow_copy();
                         }
                         else
                         {   // r2 lower bound is smaller than r1
                             lb = r1_lb.shallow_copy();
-                            ub = NBase(const_value_to_nodecl(const_value_sub(r2_lb_c, one)));
+                            ub = NBase(const_value_to_nodecl(const_value_sub(r2_lb_c, one())));
                         }
                         result = Nodecl::Range::make(lb, ub, zero_nodecl.shallow_copy(), t);
                     }
@@ -1003,7 +1003,7 @@ namespace {
         }
         else
         {
-            NBase zero_nodecl = NBase(const_value_to_nodecl(zero));
+            NBase zero_nodecl = NBase(const_value_to_nodecl(zero()));
             result = Nodecl::Range::make(lb, ub, zero_nodecl, t);
         }
 
@@ -1054,7 +1054,7 @@ namespace {
             else if (m_ub.is_constant())
                 m_ub_c = m_ub.get_constant();
 
-            NBase zero_nodecl(const_value_to_nodecl(zero));
+            NBase zero_nodecl(const_value_to_nodecl(zero()));
             if ((n_lb_c!=NULL) && (n_ub_c!=NULL) && (m_lb_c!=NULL) && (m_ub_c!=NULL))
             {
                 CmpResult cmp_limits_1 = compare_constants(n_lb_c, m_ub_c);
@@ -1295,7 +1295,7 @@ namespace {
         NBase new_lb = nodecl_value_add(lb, v);
         NBase new_ub = nodecl_value_add(ub, v);
 
-        Nodecl::Range result = Nodecl::Range::make(new_lb, new_ub, NBase(const_value_to_nodecl(zero)), v.get_type());
+        Nodecl::Range result = Nodecl::Range::make(new_lb, new_ub, NBase(const_value_to_nodecl(zero())), v.get_type());
 
         if (RANGES_DEBUG)
             std::cerr << "        Range Value Add " << r.prettyprint() << " + " << v.prettyprint()
@@ -1326,7 +1326,7 @@ namespace {
         else
             new_ub = Nodecl::Minus::make(ub, v, t);
 
-        Nodecl::Range result = Nodecl::Range::make(new_lb, new_ub, NBase(const_value_to_nodecl(zero)), t);
+        Nodecl::Range result = Nodecl::Range::make(new_lb, new_ub, NBase(const_value_to_nodecl(zero())), t);
 
         if (RANGES_DEBUG)
             std::cerr << "        Range Value Subtract " << r.prettyprint() << " - " << v.prettyprint()
@@ -1357,7 +1357,7 @@ namespace {
         else
             new_ub = Nodecl::Div::make(ub, v, t);
 
-        Nodecl::Range result = Nodecl::Range::make(new_lb, new_ub, NBase(const_value_to_nodecl(zero)), t);
+        Nodecl::Range result = Nodecl::Range::make(new_lb, new_ub, NBase(const_value_to_nodecl(zero())), t);
 
         if (RANGES_DEBUG)
             std::cerr << "        Range Value Multiplication " << r.prettyprint() << " * " << v.prettyprint()
@@ -1388,7 +1388,7 @@ namespace {
         else
             new_ub = Nodecl::Div::make(ub, v, t);
         
-        Nodecl::Range result = Nodecl::Range::make(new_lb, new_ub, NBase(const_value_to_nodecl(zero)), t);
+        Nodecl::Range result = Nodecl::Range::make(new_lb, new_ub, NBase(const_value_to_nodecl(zero())), t);
 
         if (RANGES_DEBUG)
             std::cerr << "        Range Value Division " << r.prettyprint() << " / " << v.prettyprint()

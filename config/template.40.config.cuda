@@ -19,7 +19,7 @@ compiler_options =
 linker_name =
 linker_options =
 
-codegen_phase = libcodegen-cuda.so
+codegen_phase = cuda
 target_options[mnvfc] = no_sublink embed:partial_linking
 target_options[mnvcc] = no_sublink embed:partial_linking
 target_options[mnvcxx] = no_sublink embed:partial_linking

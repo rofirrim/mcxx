@@ -29,9 +29,10 @@
 #ifndef CXX_PRETTYPRINT_INTERNAL_H
 #define CXX_PRETTYPRINT_INTERNAL_H
 
-#if !defined(CXX_PRETTYPRINT_C) && !defined(FORTRAN_PRETTYPRINT_C)
-  #error Wrongly included file. Include it only from cxx-prettyprint.c or fortran-prettyprint.c
-#endif
+#include "cxx-prettyprint.h"
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
 
 typedef struct prettyprint_context_tag
 {
@@ -73,38 +74,11 @@ typedef struct {
 #define NODE_HANDLER(type, handler, parameter) \
   [type] = {#handler, handler, parameter}
 
-// Initial behaviour
-static prettyprint_behaviour_t prettyprint_behaviour = 
-{ 
-    /* .internal_output = */ 1 
-};
+extern prettyprint_behaviour_t prettyprint_behaviour;
 
-void prettyprint_set_not_internal_output(void)
-{
-    prettyprint_behaviour.internal_output = 0;
-}
-
-void prettyprint_set_internal_output(void)
-{
-    prettyprint_behaviour.internal_output = 1;
-}
-
-static void prettyprint_context_init(prettyprint_context_t* pt_ctx)
-{
-    memset(pt_ctx, 0, sizeof(*pt_ctx));
-    // This will be configurable one day
-    pt_ctx->indent_str = "    ";
-    pt_ctx->level = 0;
-    pt_ctx->internal_output = prettyprint_behaviour.internal_output;
-}
-
-static void prettyprint_context_copy(prettyprint_context_t* dest,
-        const prettyprint_context_t* src)
-{
-    // Nothing else must be done
-    memcpy(dest, src, sizeof(*dest));
-}
-
+void prettyprint_context_init(prettyprint_context_t* pt_ctx);
+void prettyprint_context_copy(prettyprint_context_t* dest,
+        const prettyprint_context_t* src);
 
 #define NEW_PT_CONTEXT(_name, _init_fun) \
     prettyprint_context_t _v_##_name; \
@@ -117,8 +91,6 @@ static void prettyprint_context_copy(prettyprint_context_t* dest,
     prettyprint_context_t *_name = &_v_##_name; \
     prettyprint_context_copy(_name, pt_ctx); \
     _init_fun(_name, _arg)
-
-static void prettyprint_level(FILE* f, AST a, prettyprint_context_t* pt_ctx);
 
 #define HELPER_PARAMETER \
     (handlers_list[ASTKind(a)].parameter)

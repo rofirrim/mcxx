@@ -1,5 +1,5 @@
 /*--------------------------------------------------------------------
-  (C) Copyright 2006-2013 Barcelona Supercomputing Center
+  (C) Copyright 2006-2018 Barcelona Supercomputing Center
                           Centro Nacional de Supercomputacion
   
   This file is part of Mercurium C/C++ source-to-source compiler.
@@ -24,42 +24,44 @@
   Cambridge, MA 02139, USA.
 --------------------------------------------------------------------*/
 
-#ifndef CODEGEN_PHASE_HPP
-#define CODEGEN_PHASE_HPP
 
-#include "tl-compilerphase.hpp"
-#include "codegen-common.hpp"
 
-namespace Codegen
-{
-    class CodegenPhase : public TL::CompilerPhase, public CodegenVisitor
+
+#include "tl-omp-core.hpp"
+#include "tl-omp-deps.hpp"
+
+
+namespace TL {
+
+    template <>
+    struct ModuleWriterTrait<OpenMP::DependencyItem::ItemDirection>
+        : EnumWriterTrait<OpenMP::DependencyItem::ItemDirection> { };
+
+    template <>
+    struct ModuleReaderTrait<OpenMP::DependencyItem::ItemDirection>
+        : EnumReaderTrait<OpenMP::DependencyItem::ItemDirection> { };
+
+    namespace OpenMP {
+
+    DependencyItem::DependencyItem(DataReference dep_expr, ItemDirection kind)
+        : DataReference(dep_expr), _kind(kind)
+    { }
+
+    DependencyItem::ItemDirection DependencyItem::get_kind() const
     {
-        virtual void run(TL::DTO& dto);
+        return _kind;
+    }
 
-        public:
-            virtual void handle_parameter(int n, void* data);
-    };
+    void DependencyItem::module_write(ModuleWriter& mw)
+    {
+        this->TL::DataReference::module_write(mw);
+        mw.write(_kind);
+    }
 
-    CodegenPhase& get_current();
-}
+    void DependencyItem::module_read(ModuleReader& mr)
+    {
+        this->TL::DataReference::module_read(mr);
+        mr.read(_kind);
+    }
 
-#define EXPORT_CODEGEN_PHASE(ClassName, CodegenId) \
-extern "C"  \
-{ \
-    TL::CompilerPhase* get_codegen_phase_##CodegenId(void) \
-    { \
-        return new ClassName(); \
-    } \
-}
-
-#define DECLARE_CODEGEN_PHASE(CodegenId) \
-extern "C" { \
-   TL::CompilerPhase* get_codegen_phase_##CodegenId(void); \
-}
-
-// FIXME: Make this more scalable
-DECLARE_CODEGEN_PHASE(cxx);
-DECLARE_CODEGEN_PHASE(fortran);
-DECLARE_CODEGEN_PHASE(cuda);
-
-#endif // CODEGEN_PHASE_HPP
+} }

@@ -28,10 +28,6 @@
   #include <config.h>
 #endif
 
-#ifndef CXX_PRETTYPRINT_C
-  #define CXX_PRETTYPRINT_C
-#endif
-
 #ifdef HAVE_OPEN_MEMSTREAM
   // Needed, otherwise open_memstream is not declared
   #define _GNU_SOURCE

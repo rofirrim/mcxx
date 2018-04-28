@@ -651,14 +651,32 @@ extern "C"
         }
     }
 
-    void compiler_special_phase_set_codegen(compilation_configuration_t* config, const char* data)
+    void compiler_special_phase_set_codegen(compilation_configuration_t *config,
+                                            const char *data)
     {
-    	const char* lib_name = (const char*) data;
-        TL::CompilerPhase* new_phase = load_compiler_phase_from_libname(config, lib_name);
+        typedef TL::CompilerPhase*(*factory_function_t)(void);
+        factory_function_t factory_function = NULL;
+        if (data != NULL)
+        {
+            // FIXME: Handle this as data
+            if (strcmp(data, "cxx") == 0)
+                factory_function = get_codegen_phase_cxx;
+            else if (strcmp(data, "fortran") == 0)
+                factory_function = get_codegen_phase_fortran;
+            else if (strcmp(data, "cuda") == 0)
+                factory_function = get_codegen_phase_cuda;
+        }
+
+        TL::CompilerPhase *new_phase = NULL;
+        if (factory_function != NULL)
+        {
+            new_phase = factory_function();
+        }
 
         if (new_phase == NULL)
         {
-            fatal_error("Codegen phase '%s' could not be loaded. Aborting\n", data);
+            fatal_error("Codegen '%s' could not be loaded. Aborting\n",
+                        data);
         }
 
         config->codegen_phase = new_phase;

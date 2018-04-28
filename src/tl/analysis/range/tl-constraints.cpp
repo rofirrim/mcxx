@@ -35,13 +35,13 @@ namespace {
     // ************************************************************************************** //
     // ***************** initialize global variables for ranges operations ****************** //
 
-    const_value_t* zero = const_value_get_zero(/*num_bytes*/ 4, /*signed*/ 1);
-    const_value_t* one = const_value_get_one(/*num_bytes*/ 4, /*signed*/ 1);
-    const_value_t* minus_one = const_value_get_minus_one(/*num_bytes*/ 4, /*sign*/1);
-    const_value_t* long_max = const_value_get_integer(LONG_MAX, /*num_bytes*/sizeof(long), /*sign*/1);
-    NBase plus_inf = Nodecl::Analysis::PlusInfinity::make(Type::get_long_int_type(), long_max);
-    const_value_t* long_min = const_value_get_integer(LONG_MIN, /*num_bytes*/sizeof(long), /*sign*/1);
-    NBase minus_inf = Nodecl::Analysis::MinusInfinity::make(Type::get_long_int_type(), long_min);
+    const_value_t* zero() { return const_value_get_zero(/*num_bytes*/ 4, /*signed*/ 1); }
+    const_value_t* one() { return const_value_get_one(/*num_bytes*/ 4, /*signed*/ 1); }
+    const_value_t* minus_one() { return const_value_get_minus_one(/*num_bytes*/ 4, /*sign*/1); }
+    const_value_t* long_max() { return const_value_get_integer(LONG_MAX, /*num_bytes*/sizeof(long), /*sign*/1); }
+    NBase plus_inf() { return Nodecl::Analysis::PlusInfinity::make(Type::get_long_int_type(), long_max()); }
+    const_value_t* long_min() { return const_value_get_integer(LONG_MIN, /*num_bytes*/sizeof(long), /*sign*/1); }
+    NBase minus_inf() { return Nodecl::Analysis::MinusInfinity::make(Type::get_long_int_type(), long_min()); }
     
     // ************************************************************************************** //
 }
@@ -74,9 +74,9 @@ namespace {
             ssa_to_original_var[ssa_sym] = n;
 
             // 2. Build the value for the constraint
-            NBase val = Nodecl::Range::make(minus_inf.shallow_copy(),
-                                            plus_inf.shallow_copy(),
-                                            const_value_to_nodecl(zero), t);
+            NBase val = Nodecl::Range::make(minus_inf(),
+                                            plus_inf(),
+                                            const_value_to_nodecl(zero()), t);
 
             // 3. Build the constraint and insert it in the constraints map
             ConstraintBuilder cbv(*_input_constraints, _constraints, _ordered_constraints);
@@ -104,9 +104,9 @@ namespace {
             ssa_to_original_var[ssa_sym] = n;
 
             // 2. Build the value of the constraint
-            NBase val = Nodecl::Range::make(minus_inf.shallow_copy(),
-                                            plus_inf.shallow_copy(),
-                                            const_value_to_nodecl(zero), t);
+            NBase val = Nodecl::Range::make(minus_inf(),
+                                            plus_inf(),
+                                            const_value_to_nodecl(zero()), t);
 
             // 3. Build the constraint and insert it in the constraints map
             ConstraintBuilder cbv(*_input_constraints, _constraints, _ordered_constraints);
@@ -138,9 +138,9 @@ namespace {
         {
             Type t(Type::get_long_int_type());
             NBase val = Nodecl::Range::make(
-                    minus_inf.shallow_copy(),
-                    plus_inf.shallow_copy(),
-                    const_value_to_nodecl(zero), t);
+                    minus_inf(),
+                    plus_inf(),
+                    const_value_to_nodecl(zero()), t);
             n.replace(val);
         }
     }
@@ -163,9 +163,9 @@ namespace {
                 s.set_type(t);
                 ssa_to_original_var[s] = n;
                 // 2. Get the value for the constraint
-                NBase val = Nodecl::Range::make(minus_inf.shallow_copy(),
-                                                plus_inf.shallow_copy(),
-                                                const_value_to_nodecl(zero), t);
+                NBase val = Nodecl::Range::make(minus_inf(),
+                                                plus_inf(),
+                                                const_value_to_nodecl(zero()), t);
                 // 3. Build the constraint and insert it in the constraints map
                 ConstraintBuilder cbv(*_input_constraints, _constraints, _ordered_constraints);
                 Utils::Constraint c = cbv.build_constraint(s, val, Utils::__GlobalVar);
@@ -267,9 +267,9 @@ namespace {
             ssa_to_original_var[ssa_sym] = param_n;
 
             // Get the value for the constraint
-            NBase val = Nodecl::Range::make(minus_inf.shallow_copy(), 
-                                            plus_inf.shallow_copy(), 
-                                            const_value_to_nodecl(zero), t);
+            NBase val = Nodecl::Range::make(minus_inf(), 
+                                            plus_inf(), 
+                                            const_value_to_nodecl(zero()), t);
 
             // Build the constraint and insert it in the constraints map
             Utils::Constraint c = build_constraint(ssa_sym, val, Utils::__Parameter);
@@ -310,14 +310,14 @@ namespace {
                 const NBase& const_val = const_value_to_nodecl(s_val.get_constant());
                 val = Nodecl::Range::make(const_val.shallow_copy(),
                                           const_val.shallow_copy(),
-                                          const_value_to_nodecl(zero), t);
+                                          const_value_to_nodecl(zero()), t);
                 val.set_constant(s_val.get_constant());
             }
             else
             {
-                val = Nodecl::Range::make(minus_inf.shallow_copy(),
-                                          plus_inf.shallow_copy(),
-                                          const_value_to_nodecl(zero), t);
+                val = Nodecl::Range::make(minus_inf(),
+                                          plus_inf(),
+                                          const_value_to_nodecl(zero()), t);
             }
 
             // Build the constraint and insert it in the constraints map
@@ -353,9 +353,9 @@ namespace {
             NBase val_false = Nodecl::Analysis::RangeIntersection::make(
                     old_val_input_ssa_var,
                     Nodecl::Range::make(
-                            minus_inf.shallow_copy(),
-                            plus_inf.shallow_copy(),
-                            const_value_to_nodecl(zero), t),
+                            minus_inf(),
+                            plus_inf(),
+                            const_value_to_nodecl(zero()), t),
                     t);
             Utils::Constraint new_c_false = build_constraint(old_s, val_false, Utils::__Replace);
             _output_false_constraints[lhs] = new_c_false;
@@ -419,14 +419,14 @@ namespace {
             if (const_value_is_object(rhs_cnst) || const_value_is_address(rhs_cnst))
             {
                 // We know the value is constant, but cannot know its value at compile time
-                val = Nodecl::Range::make(minus_inf.shallow_copy(),
-                                          plus_inf.shallow_copy(),
-                                          const_value_to_nodecl(zero), t);
+                val = Nodecl::Range::make(minus_inf(),
+                                          plus_inf(),
+                                          const_value_to_nodecl(zero()), t);
             }
             else
             {
                 Nodecl::NodeclBase cnst = const_value_to_nodecl(rhs_cnst);
-                val = Nodecl::Range::make(cnst.shallow_copy(), cnst.shallow_copy(), const_value_to_nodecl(zero), t);
+                val = Nodecl::Range::make(cnst.shallow_copy(), cnst.shallow_copy(), const_value_to_nodecl(zero()), t);
                 val.set_constant(rhs_cnst);
             }
         }
@@ -466,12 +466,12 @@ namespace {
         if (positive)
         {
             val = Nodecl::Add::make(entry_ssa_sym.make_nodecl(/*set_ref_type*/false),
-                                    const_value_to_nodecl(one), t);
+                                    const_value_to_nodecl(one()), t);
         }
         else
         {
             val = Nodecl::Minus::make(entry_ssa_sym.make_nodecl(/*set_ref_type*/false),
-                                      const_value_to_nodecl(one), t);
+                                      const_value_to_nodecl(one()), t);
         }
         Utils::Constraint c = build_constraint(ssa_sym, val, Utils::__UnaryOp);
         _input_constraints[rhs] = c;
@@ -495,9 +495,9 @@ namespace {
         ssa_to_original_var[ssa_sym] = n;
 
         // 2.- Build the value for the constraint
-        NBase inf_val = Nodecl::Range::make(minus_inf.shallow_copy(),
-                                            plus_inf.shallow_copy(),
-                                            const_value_to_nodecl(zero), t);
+        NBase inf_val = Nodecl::Range::make(minus_inf(),
+                                            plus_inf(),
+                                            const_value_to_nodecl(zero()), t);
 
         // 3.- Build the constraint and insert it in the constraints map
         Utils::Constraint c = build_constraint(ssa_sym, inf_val, Utils::__Array);
@@ -521,9 +521,9 @@ namespace {
         ssa_to_original_var[ssa_sym] = n;
 
         // 2.- Build the value for the constraint
-        NBase inf_val = Nodecl::Range::make(minus_inf.shallow_copy(),
-                                            plus_inf.shallow_copy(),
-                                            const_value_to_nodecl(zero), t);
+        NBase inf_val = Nodecl::Range::make(minus_inf(),
+                                            plus_inf(),
+                                            const_value_to_nodecl(zero()), t);
 
         // 3.- Build the constraint and insert it in the constraints map
         Utils::Constraint c = build_constraint(ssa_sym, inf_val, Utils::__Array);
@@ -551,7 +551,7 @@ namespace {
         {
             // FIXME This may cause problems with unsigned values
             if (!const_value_is_signed(n_const))
-                n_const = const_value_cast_as_another(n_const, one);
+                n_const = const_value_cast_as_another(n_const, one());
         }
         else
             n_const = NULL;
@@ -562,7 +562,7 @@ namespace {
                 ssa_sym.make_nodecl(/*set_ref_type*/false),
                 Nodecl::Range::make(n.shallow_copy(),
                                     n.shallow_copy(),
-                                    const_value_to_nodecl(zero), t),
+                                    const_value_to_nodecl(zero()), t),
                 t);
 
         // 4.3.2.- Build the FALSE constraint value
@@ -570,25 +570,25 @@ namespace {
         NBase lb, ub;
         if (n_const != NULL)
         {
-            const_value_t* lb_const = const_value_add(n_const, one);
+            const_value_t* lb_const = const_value_add(n_const, one());
             lb = const_value_to_nodecl(lb_const);
             lb.set_constant(lb_const);
-            const_value_t* ub_const = const_value_sub(n_const, one);
+            const_value_t* ub_const = const_value_sub(n_const, one());
             ub = const_value_to_nodecl(ub_const);
             ub.set_constant(ub_const);
         }
         else
         {
-            lb = Nodecl::Add::make(n.shallow_copy(), const_value_to_nodecl(one), t);
-            ub = Nodecl::Minus::make(n.shallow_copy(), const_value_to_nodecl(one), t);
+            lb = Nodecl::Add::make(n.shallow_copy(), const_value_to_nodecl(one()), t);
+            ub = Nodecl::Minus::make(n.shallow_copy(), const_value_to_nodecl(one()), t);
         }
         val_false = Nodecl::Analysis::RangeIntersection::make(
             ssa_sym.make_nodecl(/*set_ref_type*/false),
                 Nodecl::Analysis::RangeUnion::make(
-                        Nodecl::Range::make(minus_inf.shallow_copy(), ub,
-                                            const_value_to_nodecl(zero), t),
-                        Nodecl::Range::make(lb, plus_inf.shallow_copy(),
-                                            const_value_to_nodecl(zero), t),
+                        Nodecl::Range::make(minus_inf(), ub,
+                                            const_value_to_nodecl(zero()), t),
+                        Nodecl::Range::make(lb, plus_inf(),
+                                            const_value_to_nodecl(zero()), t),
                         t),
                 t);
     }
@@ -609,28 +609,28 @@ namespace {
         {
             // FIXME This may cause problems with unsigned values
             if (!const_value_is_signed(n_const))
-                n_const = const_value_cast_as_another(n_const, one);
+                n_const = const_value_cast_as_another(n_const, one());
         }
         else
             n_const = NULL;
 
         NBase lb, ub;
-        NBase incr = const_value_to_nodecl(zero);
+        NBase incr = const_value_to_nodecl(zero());
 
         // 1.- Build the TRUE constraint value for the LHS
         //     v < x;   --TRUE--->  v1 = v0 ∩ [-∞, x-1]
         // 1.1.- Build LB: -∞
-        lb = minus_inf.shallow_copy();
+        lb = minus_inf();
         // 1.2.- Build UB: x-1
         if (n_const != NULL)
         {
-            const_value_t* ub_const = const_value_sub(n_const, one);
+            const_value_t* ub_const = const_value_sub(n_const, one());
             ub = const_value_to_nodecl(ub_const);
             ub.set_constant(ub_const);
         }
         else
         {
-            ub = Nodecl::Minus::make(n.shallow_copy(), const_value_to_nodecl(one), t);
+            ub = Nodecl::Minus::make(n.shallow_copy(), const_value_to_nodecl(one()), t);
         }
         // 1.3.- Build the whole value: v0 ∩ [-∞, x-1]
         val_true = Nodecl::Analysis::RangeIntersection::make(
@@ -646,7 +646,7 @@ namespace {
         else
             lb = n.shallow_copy();
         // 2.1.- Build UB: +∞
-        ub = plus_inf.shallow_copy();
+        ub = plus_inf();
         // 2.3.- Build the whole value: v0 ∩ [x, +∞]
         val_false = Nodecl::Analysis::RangeIntersection::make(
                 ssa_sym.make_nodecl(/*set_ref_type*/false),
@@ -670,18 +670,18 @@ namespace {
         {
             // FIXME This may cause problems with unsigned values
             if (!const_value_is_signed(n_const))
-                n_const = const_value_cast_as_another(n_const, one);
+                n_const = const_value_cast_as_another(n_const, one());
         }
         else
             n_const = NULL;
 
         NBase lb, ub;
-        NBase incr = const_value_to_nodecl(zero);
+        NBase incr = const_value_to_nodecl(zero());
 
         // 1.- Build the TRUE constraint value for the LHS
         //     v <= x;   --TRUE--->  v1 = v0 ∩ [-∞, x]
         // 1.1.- Build LB: -∞
-        lb = minus_inf.shallow_copy();
+        lb = minus_inf();
         // 1.2.- Build UB: x
         if (n_const != NULL)
             ub = const_value_to_nodecl(n_const);
@@ -698,16 +698,16 @@ namespace {
         // 2.1.- Build LB: x
         if (n_const != NULL)
         {
-            const_value_t* lb_const = const_value_add(n_const, one);
+            const_value_t* lb_const = const_value_add(n_const, one());
             lb = const_value_to_nodecl(lb_const);
             lb.set_constant(lb_const);
         }
         else
         {
-            lb = Nodecl::Minus::make(n.shallow_copy(), const_value_to_nodecl(one), t);
+            lb = Nodecl::Minus::make(n.shallow_copy(), const_value_to_nodecl(one()), t);
         }
         // 2.2.- Build UB: +∞
-        ub = plus_inf.shallow_copy();
+        ub = plus_inf();
         // 2.3.- Build the whole value: v0 ∩ [x+1, +∞]
         val_false = Nodecl::Analysis::RangeIntersection::make(
                 ssa_sym.make_nodecl(/*set_ref_type*/false),
@@ -731,29 +731,29 @@ namespace {
         {
             // FIXME This may cause problems with unsigned values
             if (!const_value_is_signed(n_const))
-                n_const = const_value_cast_as_another(n_const, one);
+                n_const = const_value_cast_as_another(n_const, one());
         }
         else
             n_const = NULL;
 
         NBase lb, ub;
-        NBase incr = const_value_to_nodecl(zero);
+        NBase incr = const_value_to_nodecl(zero());
 
         // 1.- Build the TRUE constraint value for the RHS
         //     v > x   --TRUE--->  v1 = v0 ∩ [x+1, +∞]
         // 1.1.- Build LB: x+1
         if (n_const != NULL)
         {
-            const_value_t* lb_const = const_value_add(n_const, one);
+            const_value_t* lb_const = const_value_add(n_const, one());
             lb = const_value_to_nodecl(lb_const);
             lb.set_constant(lb_const);
         }
         else
         {
-            lb = Nodecl::Add::make(n.shallow_copy(), const_value_to_nodecl(one), t);
+            lb = Nodecl::Add::make(n.shallow_copy(), const_value_to_nodecl(one()), t);
         }
         // 1.2.- Build UB: +∞
-        ub = plus_inf.shallow_copy();
+        ub = plus_inf();
         // 1.3.- Build the whole value: v0 ∩ [x+1, +∞]
         val_true = Nodecl::Analysis::RangeIntersection::make(
                 ssa_sym.make_nodecl(/*set_ref_type*/false),
@@ -763,7 +763,7 @@ namespace {
         // 2.- Build the FALSE constraint value for the RHS
         //     v > x   --FALSE-->  v2 = v0 ∩ [-∞, x]
         // 1.1.- Build LB: -∞
-        lb = minus_inf.shallow_copy();
+        lb = minus_inf();
         // 1.2.- Build UB: x
         if (n_const != NULL)
             ub = const_value_to_nodecl(n_const);
@@ -792,13 +792,13 @@ namespace {
         {
             // FIXME This may cause problems with unsigned values
             if (!const_value_is_signed(n_const))
-                n_const = const_value_cast_as_another(n_const, one);
+                n_const = const_value_cast_as_another(n_const, one());
         }
         else
             n_const = NULL;
 
         NBase lb, ub;
-        NBase incr = const_value_to_nodecl(zero);
+        NBase incr = const_value_to_nodecl(zero());
 
         // 1.- Build the TRUE constraint value for the RHS
         //     v >= x   --TRUE--->  v1 = v0 ∩ [x, +∞]
@@ -808,7 +808,7 @@ namespace {
         else
             lb = n.shallow_copy();
         // 1.2.- Build UB: +∞
-        ub = plus_inf.shallow_copy();
+        ub = plus_inf();
         // 1.3.- Build the whole value: v0 ∩ [x, +∞]
         val_true = Nodecl::Analysis::RangeIntersection::make(
                 ssa_sym.make_nodecl(/*set_ref_type*/false),
@@ -818,17 +818,17 @@ namespace {
         // 2.- Build the FALSE constraint value for the RHS
         //     v >= x   --FALSE-->  v2 = v0 ∩ [-∞, x-1]
         // 1.1.- Build LB: -∞
-        lb = minus_inf.shallow_copy();
+        lb = minus_inf();
         // 1.2.- Build UB: x-1
         if (n_const != NULL)
         {
-            const_value_t* ub_const = const_value_sub(n_const, one);
+            const_value_t* ub_const = const_value_sub(n_const, one());
             ub = const_value_to_nodecl(ub_const);
             ub.set_constant(ub_const);
         }
         else
         {
-            ub = Nodecl::Add::make(n.shallow_copy(), const_value_to_nodecl(one), t);
+            ub = Nodecl::Add::make(n.shallow_copy(), const_value_to_nodecl(one()), t);
         }
         // 1.3.- Build the whole value: v0 ∩ [-∞, x-1]
         val_false = Nodecl::Analysis::RangeIntersection::make(
@@ -1175,7 +1175,7 @@ namespace {
     void ConstraintBuilder::visit(const Nodecl::LogicalNot& n)
     {
         const NBase& rhs = n.get_rhs();
-        const NBase& lhs = const_value_to_nodecl(zero);
+        const NBase& lhs = const_value_to_nodecl(zero());
         visit_comparison(rhs,
                          lhs,
                          NODECL_EQUAL);
@@ -1236,14 +1236,14 @@ namespace {
         s_true.set_type(t);
         ssa_to_original_var[s_true] = lhs;
         // 2.1.2.- Build the TRUE constraint value
-        NBase ub = (rhs.is_constant() ? const_value_to_nodecl(const_value_sub(rhs.get_constant(), one)) 
-                                      : Nodecl::Minus::make(val.shallow_copy(), const_value_to_nodecl(one), t));
+        NBase ub = (rhs.is_constant() ? const_value_to_nodecl(const_value_sub(rhs.get_constant(), one())) 
+                                      : Nodecl::Minus::make(val.shallow_copy(), const_value_to_nodecl(one()), t));
         NBase val_true = 
             Nodecl::Analysis::RangeIntersection::make(
                 last_ssa_s.make_nodecl(/*set_ref_type*/false), 
-                Nodecl::Range::make(const_value_to_nodecl(zero),
+                Nodecl::Range::make(const_value_to_nodecl(zero()),
                                     ub, 
-                                    const_value_to_nodecl(zero), t),
+                                    const_value_to_nodecl(zero()), t),
                 t);
         // 2.1.3.- Build the TRUE constraint and store it
         Utils::Constraint c_true = build_constraint(s_true, val_true, Utils::__ModTrue);
@@ -1260,12 +1260,12 @@ namespace {
             Nodecl::Analysis::RangeIntersection::make(
                 last_ssa_s.make_nodecl(/*set_ref_type*/false),
                 Nodecl::Analysis::RangeUnion::make(
-                    Nodecl::Range::make(minus_inf.shallow_copy(),
-                                        const_value_to_nodecl(minus_one),
-                                        const_value_to_nodecl(zero), t),
+                    Nodecl::Range::make(minus_inf(),
+                                        const_value_to_nodecl(minus_one()),
+                                        const_value_to_nodecl(zero()), t),
                     Nodecl::Range::make(val.shallow_copy(),
-                                        plus_inf.shallow_copy(),
-                                        const_value_to_nodecl(zero), t),
+                                        plus_inf(),
+                                        const_value_to_nodecl(zero()), t),
                     t),
                 t);
         // 2.2.3.- Build the FALSE constraint and store it

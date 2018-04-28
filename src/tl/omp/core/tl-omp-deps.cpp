@@ -42,36 +42,7 @@
 
 namespace TL {
 
-    template <>
-    struct ModuleWriterTrait<OpenMP::DependencyItem::ItemDirection>
-        : EnumWriterTrait<OpenMP::DependencyItem::ItemDirection> { };
-
-    template <>
-    struct ModuleReaderTrait<OpenMP::DependencyItem::ItemDirection>
-        : EnumReaderTrait<OpenMP::DependencyItem::ItemDirection> { };
-
     namespace OpenMP {
-
-    DependencyItem::DependencyItem(DataReference dep_expr, ItemDirection kind)
-        : DataReference(dep_expr), _kind(kind)
-    { }
-
-    DependencyItem::ItemDirection DependencyItem::get_kind() const
-    {
-        return _kind;
-    }
-
-    void DependencyItem::module_write(ModuleWriter& mw)
-    {
-        this->TL::DataReference::module_write(mw);
-        mw.write(_kind);
-    }
-
-    void DependencyItem::module_read(ModuleReader& mr)
-    {
-        this->TL::DataReference::module_read(mr);
-        mr.read(_kind);
-    }
 
     void add_extra_symbols(Nodecl::NodeclBase data_ref,
             DataEnvironment& ds,

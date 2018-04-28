@@ -6669,4 +6669,4 @@ OPERATOR_TABLE
 }
 
 
-EXPORT_PHASE(Codegen::FortranBase)
+EXPORT_CODEGEN_PHASE(Codegen::FortranBase, fortran)

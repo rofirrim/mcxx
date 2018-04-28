@@ -44,11 +44,11 @@ namespace {
     // ************************************************************************************** //
     // ***************** initialize global variables for ranges operations ****************** //
 
-    const_value_t* zero = const_value_get_zero(/*num_bytes*/ 4, /*signed*/ 1);
-    const_value_t* long_max = const_value_get_integer(LONG_MAX, /*num_bytes*/sizeof(long), /*sign*/1);
-    NBase plus_inf = Nodecl::Analysis::PlusInfinity::make(Type::get_long_int_type(), long_max);
-    const_value_t* long_min = const_value_get_integer(LONG_MIN, /*num_bytes*/sizeof(long), /*sign*/1);
-    NBase minus_inf = Nodecl::Analysis::MinusInfinity::make(Type::get_long_int_type(), long_min);
+    const_value_t* zero() { return const_value_get_zero(/*num_bytes*/ 4, /*signed*/ 1); }
+    const_value_t* long_max() { return const_value_get_integer(LONG_MAX, /*num_bytes*/sizeof(long), /*sign*/1); }
+    NBase plus_inf() { return Nodecl::Analysis::PlusInfinity::make(Type::get_long_int_type(), long_max()); }
+    const_value_t* long_min() { return const_value_get_integer(LONG_MIN, /*num_bytes*/sizeof(long), /*sign*/1); }
+    NBase minus_inf() { return Nodecl::Analysis::MinusInfinity::make(Type::get_long_int_type(), long_min()); }
 
     // ************************************************************************************** //
 }
@@ -131,7 +131,7 @@ namespace {
         Nodecl::Range const_range = Nodecl::Range::make(
                 constant.shallow_copy(),
                 constant.shallow_copy(),
-                const_value_to_nodecl(zero),
+                const_value_to_nodecl(zero()),
                 constant.get_type());
         return const_range;
     }
@@ -859,17 +859,17 @@ namespace {
             const_value_t* diff = const_value_sub(c, *it);
             if (const_value_is_positive(diff) || const_value_is_zero(diff))
             {
-                if (const_value_is_zero(const_value_sub(*it, long_max)))
+                if (const_value_is_zero(const_value_sub(*it, long_max())))
                 {
                     internal_error("The next lower value of a sequence of constants can never be +inf.\n", 0);
                 }
-                else if (const_value_is_zero(const_value_add(*it, long_min)))
-                    return minus_inf.shallow_copy();
+                else if (const_value_is_zero(const_value_add(*it, long_min())))
+                    return minus_inf();
                 else
                     return const_value_to_nodecl(*it);
             }
         }
-        return minus_inf.shallow_copy();
+        return minus_inf();
     }
 
     static NBase get_next_greater(const std::set<const_value_t*>& const_values, const_value_t* c)
@@ -880,9 +880,9 @@ namespace {
             const_value_t* diff = const_value_sub(*it, c);
             if (const_value_is_positive(diff) || const_value_is_zero(diff))
             {   // if we have a constant value equivalent to +inf or -inf, return +inf or -inf
-                if (const_value_is_zero(const_value_sub(*it, long_max)))
-                    return plus_inf.shallow_copy();
-                else if (const_value_is_zero(const_value_add(*it, long_min)))
+                if (const_value_is_zero(const_value_sub(*it, long_max())))
+                    return plus_inf();
+                else if (const_value_is_zero(const_value_add(*it, long_min())))
                 {
                     internal_error("The next lower value of a sequence of constants can never be +inf.\n", 0);
                 }
@@ -890,7 +890,7 @@ namespace {
                     return const_value_to_nodecl(*it);
             }
         }
-        return plus_inf.shallow_copy();
+        return plus_inf();
     }
 
     static void gather_constants_from_const_node(CGNode* n, std::set<const_value_t*>& const_values)
@@ -1032,7 +1032,7 @@ namespace {
                                     widen_valuation = Nodecl::Range::make(
                                             next_lower,
                                             next_upper,
-                                            const_value_to_nodecl(zero),
+                                            const_value_to_nodecl(zero()),
                                             Utils::get_range_type(next_lower.get_type(), next_upper.get_type()));
                                 }
                                 else
@@ -1041,7 +1041,7 @@ namespace {
                                     widen_valuation = Nodecl::Range::make(
                                             next_lower,
                                             old_ub,
-                                            const_value_to_nodecl(zero),
+                                            const_value_to_nodecl(zero()),
                                             Utils::get_range_type(next_lower.get_type(), old_ub.get_type()));
                                 }
                             }
@@ -1061,11 +1061,11 @@ namespace {
                             {
                                 const NBase& next_upper = 
                                         (new_ub.is_constant() ? get_next_greater(const_values, new_ub.get_constant())
-                                                              : plus_inf.shallow_copy());
+                                                              : plus_inf());
                                 widen_valuation = Nodecl::Range::make(
                                         old_lb,
                                         next_upper,
-                                        const_value_to_nodecl(zero),
+                                        const_value_to_nodecl(zero()),
                                         Utils::get_range_type(old_lb.get_type(), next_upper.get_type()));
                             }
                         }
@@ -1179,7 +1179,7 @@ namespace {
                         future_valuation = Nodecl::Range::make(
                                 c_val_lb,
                                 c_val_ub,
-                                const_value_to_nodecl(zero),
+                                const_value_to_nodecl(zero()),
                                 Utils::get_range_type(c_val_lb.get_type(), c_val_ub.get_type()));
                     }
                     else if (Nodecl::Utils::nodecl_contains_nodecl_by_structure(c_val_ub, s))
@@ -1190,7 +1190,7 @@ namespace {
                         future_valuation = Nodecl::Range::make(
                                 c_val_lb,
                                 c_val_ub,
-                                const_value_to_nodecl(zero),
+                                const_value_to_nodecl(zero()),
                                 Utils::get_range_type(c_val_lb.get_type(), c_val_ub.get_type()));
                     }
                     else
@@ -1285,21 +1285,21 @@ namespace {
                     if (old_lb.is<Nodecl::Analysis::MinusInfinity>()
                             && new_lb.is_constant()
                             && const_value_is_positive(const_value_sub(new_lb.get_constant(),
-                                                                    minus_inf.get_constant())))
+                                                                    long_min())))
                     {   // I[Y]_ = -inf && e(Y)_ > -inf ---> [e(Y)_, I[Y]^]
                         narrow_valuation =
                                 Nodecl::Range::make(new_lb, old_ub,
-                                                    const_value_to_nodecl(zero),
+                                                    const_value_to_nodecl(zero()),
                                                     Utils::get_range_type(new_lb.get_type(), old_ub.get_type()));
                     }
                     else if (old_ub.is<Nodecl::Analysis::PlusInfinity>()
                                 && new_ub.is_constant()
-                                && const_value_is_positive(const_value_sub(plus_inf.get_constant(),
+                                && const_value_is_positive(const_value_sub(long_max(),
                                                                         new_ub.get_constant())))
                     {   // I[Y]^ = +inf && e(Y)^ < +inf ---> [I[Y]_, e(Y)^]
                         narrow_valuation =
                                 Nodecl::Range::make(old_lb, new_ub,
-                                                    const_value_to_nodecl(zero),
+                                                    const_value_to_nodecl(zero()),
                                                     Utils::get_range_type(old_lb.get_type(), new_ub.get_type()));
                     }
                     else
@@ -1313,14 +1313,14 @@ namespace {
                             {   // I[Y]_ > e(Y)_ ---> [e(Y)_, I[Y]^]
                                 narrow_valuation =
                                     Nodecl::Range::make(new_lb, old_ub,
-                                                        const_value_to_nodecl(zero),
+                                                        const_value_to_nodecl(zero()),
                                                         Utils::get_range_type(new_lb.get_type(), old_ub.get_type()));
                             }
                             else if (const_value_is_negative(diff))
                             {   // I[Y]^ < e(Y)^ ---> [I[Y]_, e(Y)^]
                                 narrow_valuation =
                                     Nodecl::Range::make(old_lb, new_ub,
-                                                        const_value_to_nodecl(zero),
+                                                        const_value_to_nodecl(zero()),
                                                         Utils::get_range_type(old_lb.get_type(), new_ub.get_type()));
                             }
                         }
@@ -1954,9 +1954,9 @@ namespace {
                                 ssa_var.set_type(t);
                                 ssa_to_original_var[ssa_var] = orig_var;
                                 // 2.2.1.1.2.- Build the value of the new constraint
-                                NBase new_constraint_val = Nodecl::Range::make(minus_inf.shallow_copy(),
-                                                                               plus_inf.shallow_copy(),
-                                                                               const_value_to_nodecl(zero), t);
+                                NBase new_constraint_val = Nodecl::Range::make(minus_inf(),
+                                                                               plus_inf(),
+                                                                               const_value_to_nodecl(zero()), t);
                                 // 2.2.1.1.3.- Remove the old constraint from the input_constrs
                                 //         If it was in the merged_input_constrs map, it will be deleted with the insertion
                                 if (input_constrs.find(orig_var) != input_constrs.end())

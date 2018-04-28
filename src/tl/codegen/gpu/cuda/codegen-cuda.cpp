@@ -128,4 +128,4 @@ namespace Codegen
 
 } // Codegen
 
-EXPORT_PHASE(Codegen::CudaGPU)
+EXPORT_CODEGEN_PHASE(Codegen::CudaGPU, cuda)

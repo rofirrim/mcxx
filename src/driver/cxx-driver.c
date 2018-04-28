@@ -89,6 +89,7 @@
 #include "cxx-target-tools.h"
 
 #include "filename.h"
+#include "timing.h"
 
 #include "fortran03-parser.h"
 #include "fortran03-lexer.h"
@@ -798,11 +799,11 @@ static void ensure_codegen_is_loaded(void)
         if (IS_C_LANGUAGE
                 || IS_CXX_LANGUAGE)
         {
-            compiler_special_phase_set_codegen(CURRENT_CONFIGURATION, "libcodegen-cxx.so");
+            compiler_special_phase_set_codegen(CURRENT_CONFIGURATION, "cxx");
         }
         else if (IS_FORTRAN_LANGUAGE)
         {
-            compiler_special_phase_set_codegen(CURRENT_CONFIGURATION, "libcodegen-fortran.so");
+            compiler_special_phase_set_codegen(CURRENT_CONFIGURATION, "fortran");
         }
         else
         {
@@ -5077,12 +5078,12 @@ void load_compiler_phases(compilation_configuration_t* config)
     {
         compilation_configuration_t dummy;
         memset(&dummy, 0, sizeof(dummy));
-        compiler_special_phase_set_codegen(&dummy, "libcodegen-cxx.so");
+        compiler_special_phase_set_codegen(&dummy, "cxx");
     }
     {
         compilation_configuration_t dummy;
         memset(&dummy, 0, sizeof(dummy));
-        compiler_special_phase_set_codegen(&dummy, "libcodegen-fortran.so");
+        compiler_special_phase_set_codegen(&dummy, "fortran");
     }
 
     // This invokes a C++ routine that will dlopen all libraries, get the proper symbol
