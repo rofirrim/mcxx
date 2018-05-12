@@ -43,6 +43,9 @@
 // Compilation options
 compilation_process_t compilation_process;
 
+// Debug options
+debug_options_t debug_options;
+
 #define BACKTRACE_SIZE 1024
 static void *backtrace_buffer[BACKTRACE_SIZE];
 

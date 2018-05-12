@@ -609,8 +609,6 @@ static char do_not_unload_phases = 0;
 static char do_not_warn_bad_config_filenames = 0;
 static char show_help_message = 0;
 
-debug_options_t debug_options;
-
 static compilation_configuration_t* get_sublanguage_configuration(
         source_language_t source_language,
         compilation_configuration_t* fallback_config);
