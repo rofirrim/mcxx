@@ -40,6 +40,7 @@
 #include <fcntl.h>
 
 #include "filename.h"
+#include "timing.h"
 
 
 #define ID_FILENAME "MERCURIUM_MODULE"

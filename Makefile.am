@@ -156,6 +156,8 @@ lib_libmcxx_utils_la_SOURCES = \
                           lib/red_black_tree.h \
                           lib/mem.c \
                           lib/mem.h \
+                          lib/timing.c \
+                          lib/timing.h \
                           $(END)
 
 lib_libmcxx_utils_la_LDFLAGS= -avoid-version $(no_undefined)

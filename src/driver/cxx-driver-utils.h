@@ -31,8 +31,6 @@
 #define CXX_DRIVERUTILS_H
 
 #include <stdio.h>
-#include <sys/time.h>
-#include <time.h>
 #include "cxx-process.h"
 
 MCXX_BEGIN_DECLS
@@ -84,19 +82,6 @@ int execute_program_flags(const char* program_name, const char** arguments,
 // char** routines
 int count_null_ended_array(void** v);
 void remove_string_from_null_ended_string_array(const char** string_arr, const char* to_remove);
-
-typedef struct
-{
-  struct timeval start;
-  struct timeval end;
-  double elapsed_time;
-} timing_t;
-
-void timing_start(timing_t* t);
-void timing_end(timing_t* t);
-int timing_seconds(const timing_t* t);
-int timing_microseconds(const timing_t* t);
-double timing_elapsed(const timing_t* t);
 
 void run_gdb(void);
 

@@ -44,6 +44,8 @@
 #include "cxx-entrylist.h"
 #include "cxx-asttype-str.h"
 
+#include "timing.h"
+
 #include <stdio.h>
 #include <sqlite3.h>
 #include <errno.h>
